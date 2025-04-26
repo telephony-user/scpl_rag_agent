@@ -70,113 +70,127 @@ const sanitizeModuleId = (id) => {
     return id.replace(/[^a-zA-Z0-9._-]/g, '');
 };
 
-// Webhook endpoint - Apply validation middleware first
+// Webhook endpoint
 app.post('/webhook/docs-push', verifyWebhookSignature, (req, res) => {
-  console.log('[Webhook] Received and validated push event');
-  const payload = req.bodyJson;
+    console.log('[Webhook] Received and validated push event');
+    const payload = req.bodyJson;
 
-  // --- Payload Parsing Logic ---
-  const changedFiles = [];
-  if (payload && payload.commits && Array.isArray(payload.commits)) {
-    payload.commits.forEach(commit => {
-      if (commit.added && Array.isArray(commit.added)) {
-        changedFiles.push(...commit.added);
-      }
-      if (commit.modified && Array.isArray(commit.modified)) {
-        changedFiles.push(...commit.modified);
-      }
-      // We might also consider commit.removed if deleted files should trigger cleanup
-    });
-  }
-
-  const relevantFiles = changedFiles.filter(file =>
-    file.startsWith(`${SOURCE_MD_DIR_PREFIX}/`) && (file.endsWith('.md') || file.endsWith('.docx'))
-  );
-
-  const affectedModules = new Set();
-  relevantFiles.forEach(file => {
-    const parts = file.split('/');
-    if (parts.length > 1 && parts[0] === SOURCE_MD_DIR_PREFIX) {
-      // Sanitize the extracted module ID before adding
-      const sanitizedId = sanitizeModuleId(parts[1]);
-      if(sanitizedId) {
-        affectedModules.add(sanitizedId);
-      }
-    }
-  });
-
-  if (affectedModules.size === 0) {
-    console.log('[Webhook] No relevant file changes detected in this push.');
-    return res.status(200).send('Webhook received, no relevant changes.');
-  }
-
-  console.log(`[Webhook] Detected changes affecting modules: ${[...affectedModules].join(', ')}`);
-
-  // --- End Payload Parsing ---
-
-  // TODO (Phase 3.3): Asynchronously trigger pipeline for each module in affectedModules
-  const modulesToProcess = [...affectedModules];
-  // Placeholder: Just log the modules that need processing
-  console.log(`[Webhook] Modules queued for async processing: ${modulesToProcess.join(', ')}`);
-
-  // --- Respond OK immediately --- 
-  res.status(200).send('Webhook received successfully. Processing triggered.');
-  console.log(`[Webhook] Responded 200 OK for modules: ${modulesToProcess.join(', ')}.`);
-
-  // --- Asynchronous Processing --- 
-  console.log('[Webhook] Starting async processing...');
-  modulesToProcess.forEach(moduleId => {
-    const safeModuleId = sanitizeModuleId(moduleId);
-    if (!safeModuleId) {
-        console.error(`[AsyncProc] Invalid module ID detected after sanitization: '${moduleId}'. Skipping.`);
-        return;
-    }
-
-    console.log(`[AsyncProc] Spawning pipeline for module: ${safeModuleId}`);
-    const command = `npm run preprocess -- --module=${safeModuleId} && npm run pipeline -- --module=${safeModuleId}`;
-    const shell = process.platform === 'win32' ? 'cmd' : 'sh';
-    const args = process.platform === 'win32' ? ['/c', command] : ['-c', command];
-
-    const child = spawn(shell, args, {
-        // Change stdio to 'pipe' to capture output
-        stdio: ['ignore', 'pipe', 'pipe'] 
-    });
-
-    // Log stdout data as it comes in
-    child.stdout.on('data', (data) => {
-        // Log each line separately to avoid partial lines in Coolify logs
-        data.toString().trim().split('\n').forEach(line => {
-             if (line) { // Avoid logging empty lines
-                console.log(`[AsyncProc ${safeModuleId}]: ${line}`);
-             }
+    // --- Payload Parsing Logic (Updated for root module folders) ---
+    const changedFiles = [];
+    if (payload && payload.commits && Array.isArray(payload.commits)) {
+        payload.commits.forEach(commit => {
+            if (commit.added && Array.isArray(commit.added)) {
+                changedFiles.push(...commit.added);
+            }
+            if (commit.modified && Array.isArray(commit.modified)) {
+                changedFiles.push(...commit.modified);
+            }
         });
+    }
+
+    // Filter for .md/.docx files directly inside a root folder (acting as module ID)
+    const relevantFiles = changedFiles.filter(file => {
+        const parts = file.split('/');
+        // Check if path has at least two parts (module_id/file.ext)
+        // and ends with the correct extension.
+        return parts.length >= 2 && (file.endsWith('.md') || file.endsWith('.docx'));
     });
 
-    // Log stderr data as it comes in
-    child.stderr.on('data', (data) => {
-        data.toString().trim().split('\n').forEach(line => {
-             if (line) {
-                 console.error(`[AsyncProc ${safeModuleId} ERR]: ${line}`);
-             }
-         });
-    });
-
-    child.on('close', (code) => {
-        console.log(`[AsyncProc ${safeModuleId}] Process finished with code ${code}.`);
-        // No need to log full output here again as it was logged in real-time
-        if (code !== 0) {
-            console.error(`[AsyncProc ${safeModuleId}] Pipeline failed.`);
-        } else {
-            console.log(`[AsyncProc ${safeModuleId}] Pipeline completed.`); 
-            // The publish script (called by pipeline) should handle its own logging
+    const affectedModules = new Set();
+    relevantFiles.forEach(file => {
+        // Extract module_id assuming structure <module_id>/...file.ext
+        const parts = file.split('/');
+        // The first part is the potential module ID
+        const potentialModuleId = parts[0];
+        const sanitizedId = sanitizeModuleId(potentialModuleId);
+        if (sanitizedId) {
+            // Basic check to avoid adding file names as module IDs if they are in the root
+            // This assumes module IDs don't contain dots like filenames usually do.
+            // Adjust this check if your module IDs can contain dots.
+            // A better check might involve checking if parts[0] exists in a predefined list of modules if possible.
+            if (!potentialModuleId.includes('.') || parts.length > 1) { // Avoid adding root files, ensure it's a directory path
+                affectedModules.add(sanitizedId);
+            } else {
+                 console.log(`[Webhook] Skipping file in root directory: ${file}`);
+            }
         }
     });
+    // --- End Payload Parsing ---\
 
-    child.on('error', (err) => {
-        console.error(`[AsyncProc ${safeModuleId}] Failed to spawn process:`, err);
-    });
-  }); // End of forEach loop
-});
+    if (affectedModules.size === 0) {
+        console.log('[Webhook] No relevant file changes detected in module directories.');
+        return res.status(200).send('Webhook received, no relevant changes in module directories.');
+    }
+
+    const modulesToProcess = [...affectedModules];
+    console.log(`[Webhook] Detected changes affecting modules: ${modulesToProcess.join(', ')}`);
+
+    // --- Respond OK immediately ---
+    res.status(200).send('Webhook received successfully. Processing triggered.');
+    console.log(`[Webhook] Responded 200 OK for modules: ${modulesToProcess.join(', ')}.`);
+
+    // --- Asynchronous Processing ---
+    console.log('[Webhook] Starting async processing...');
+    modulesToProcess.forEach(moduleId => {
+        const safeModuleId = sanitizeModuleId(moduleId);
+        if (!safeModuleId) {
+            console.error(`[AsyncProc] Invalid module ID detected after sanitization: '${moduleId}'. Skipping.`);
+            return;
+        }
+
+        console.log(`[AsyncProc] Spawning pipeline for module: ${safeModuleId}`);
+        // IMPORTANT: Make sure the 'pipeline' script eventually calls 'publish_results.js'
+        const command = `npm run preprocess -- --module=${safeModuleId} && npm run pipeline -- --module=${safeModuleId}`;
+        const shell = process.platform === 'win32' ? 'cmd' : 'sh';
+        const args = process.platform === 'win32' ? ['/c', command] : ['-c', command];
+
+        const child = spawn(shell, args, {
+            stdio: ['ignore', 'pipe', 'pipe'] // Capture stdout and stderr
+        });
+
+        let stdoutData = ''; // Buffer for stdout
+        let stderrData = ''; // Buffer for stderr
+
+        // Log stdout data as it comes in
+        child.stdout.on('data', (data) => {
+            const lines = data.toString().trim().split('\n');
+            lines.forEach(line => {
+                 if (line) {
+                    console.log(`[AsyncProc ${safeModuleId}]: ${line}`);
+                    stdoutData += line + '\n'; // Append to buffer
+                 }
+            });
+        });
+
+        // Log stderr data as it comes in
+        child.stderr.on('data', (data) => {
+            const lines = data.toString().trim().split('\n');
+            lines.forEach(line => {
+                 if (line) {
+                     console.error(`[AsyncProc ${safeModuleId} ERR]: ${line}`);
+                     stderrData += line + '\n'; // Append to buffer
+                 }
+             });
+        });
+
+        child.on('close', (code) => {
+            console.log(`[AsyncProc ${safeModuleId}] Process finished with code ${code}.`);
+            if (code !== 0) {
+                // Log buffers only on error if needed (since real-time logging is enabled)
+                console.error(`[AsyncProc ${safeModuleId}] Pipeline failed.`);
+                // Optionally log full buffers on error for deeper debugging:
+                // console.error(`[AsyncProc ${safeModuleId}] Full Stderr:\n${stderrData}`);
+                // console.error(`[AsyncProc ${safeModuleId}] Full Stdout:\n${stdoutData}`);
+            } else {
+                console.log(`[AsyncProc ${safeModuleId}] Pipeline completed.`);
+            }
+        });
+
+        child.on('error', (err) => {
+            console.error(`[AsyncProc ${safeModuleId}] Failed to spawn process:`, err);
+        });
+    }); // End of forEach loop
+}); // End of app.post handler
 
 // Basic root route for health check or info
 app.get('/', (req, res) => {
