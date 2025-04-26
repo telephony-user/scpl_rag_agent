@@ -226,8 +226,8 @@ async function processAndReplaceImages(mdContent, mdFilePath) {
     }
     console.log(`[Main Processor Debug] Конец проверки содержимого.`);
 
-    // Regex to find <img> tags, capturing src
-    const imgRegex = /<img\\s+[^>]*?src=(?:\\\"([^\\\"]+)\\\"|\'([^\']+)\')[^>]*>/gi;
+    // Use a simpler regex
+    const imgRegex = /<img[^>]+src\s*=\s*["']([^"']+)["'][^>]*>/gi;
     let match;
 
     console.log(`[Main Processor] Поиск HTML <img> тегов с использованием regex...`);
@@ -237,7 +237,8 @@ async function processAndReplaceImages(mdContent, mdFilePath) {
 
     while ((match = imgRegex.exec(mdContent)) !== null) {
         const fullMatch = match[0];
-        const imgSrc = match[1] || match[2]; // Get src value from quotes
+        // Group 1 captures the src value in the new regex
+        const imgSrc = match[1];
 
         if (!imgSrc) {
             console.log(`[Main Processor Debug] Regex нашел совпадение, но не смог извлечь src: ${fullMatch}`);
@@ -254,7 +255,6 @@ async function processAndReplaceImages(mdContent, mdFilePath) {
         }
         if (isSvg && !SKIP_SVG) {
              console.log(`[Main Processor] Обработка SVG тега (пропуск LLM): ${fullMatch}`);
-             // Keep SVG tag as is for now
              skippedSvgCount++; // Count as skipped for LLM processing
              continue;
         }
