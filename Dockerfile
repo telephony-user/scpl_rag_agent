@@ -22,5 +22,5 @@ COPY . .
 # Expose the port the app runs on (for webhook listener)
 EXPOSE 3000
 
-# Define the command to run the application (make sure this is the desired default command)
-CMD [ "node", "src/server.js" ] # Runs the webhook server by default 
+# Define the command to run the application (using shell form)
+CMD node src/server.js # Runs the webhook server by default 
