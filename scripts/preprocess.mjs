@@ -15,6 +15,7 @@ import { visit } from 'unist-util-visit';
 import { toString as hastToString } from 'hast-util-to-string'; // For getting text from header nodes
 import remarkStringify from 'remark-stringify'; // To stringify chunks
 import { Buffer } from 'buffer'; // For base64 image data
+import axios from 'axios'; // Needed for LLM call
 
 // Assuming llm_processor.js is in the same directory or adjust path
 // import { getMermaidDiagramFromImage } from './llm_processor.js';
@@ -38,6 +39,7 @@ const SPLIT_HEADERS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
 const SKIP_SVG = process.env.SKIP_SVG !== 'false'; // Skip SVG by default
 const LLM_IMAGE_ENDPOINT = process.env.LLM_IMAGE_ENDPOINT; // Endpoint for image->Mermaid LLM
 const LLM_API_KEY = process.env.LLM_API_KEY; // API key for the LLM
+const LLM_MODEL_NAME = process.env.LLM_MODEL_NAME || 'anthropic/claude-3.5-sonnet'; // Default model
 
 // --- Argument Parsing ---
 const argv = yargs(hideBin(process.argv))
@@ -148,6 +150,217 @@ async function convertDocxToMd(docxPath, outputDir, moduleDir) {
   });
 }
 
+// --- Image Processing Logic --- (Restored)
+async function getMermaidDiagramFromImage(imagePath, contextText = '') {
+    if (!LLM_IMAGE_ENDPOINT || !LLM_API_KEY) {
+        console.warn('[Mermaid Generator] LLM endpoint or API key not configured. Skipping image processing.');
+        return null;
+    }
+    console.log(`[Mermaid Generator] Начало генерации для ${imagePath}`);
+    try {
+        console.log(`[Mermaid Generator] Попытка чтения изображения: ${imagePath}`);
+        const imageBuffer = await fs.readFile(imagePath);
+        const base64Image = imageBuffer.toString('base64');
+        console.log(`[Mermaid Generator] Файл изображения ${imagePath} успешно прочитан.`);
+
+        // Basic MIME type detection from extension
+        const ext = path.extname(imagePath).toLowerCase();
+        let mimeType = 'application/octet-stream';
+        if (ext === '.png') mimeType = 'image/png';
+        else if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
+        else if (ext === '.gif') mimeType = 'image/gif';
+        else if (ext === '.webp') mimeType = 'image/webp';
+        console.log(`[Mermaid Generator] Определен MIME-тип: ${mimeType} для ${imagePath}`);
+
+        const requestBody = {
+            model: LLM_MODEL_NAME,
+            prompt: `Generate a Mermaid diagram code representing the content of this image. ${contextText ? 'Context: ' + contextText : ''}`,
+            images: [base64Image]
+        };
+
+        console.log(`[Mermaid Generator] Запрос к LLM (${LLM_MODEL_NAME}) для ${imagePath}...`);
+        const response = await axios.post(LLM_IMAGE_ENDPOINT, requestBody, {
+            headers: {
+                'Authorization': `Bearer ${LLM_API_KEY}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (response.status === 200 && response.data && response.data.response) {
+             // Extract Mermaid code, removing backticks and 'mermaid' label if present
+            let mermaidCode = response.data.response.trim();
+            if (mermaidCode.startsWith('```mermaid')) {
+                mermaidCode = mermaidCode.substring('```mermaid'.length);
+            }
+            if (mermaidCode.startsWith('```')) {
+                 mermaidCode = mermaidCode.substring(3);
+            }
+             if (mermaidCode.endsWith('```')) {
+                mermaidCode = mermaidCode.substring(0, mermaidCode.length - 3);
+            }
+            console.log(`[Mermaid Generator] Успешно получен Mermaid код для ${imagePath}.`);
+            return mermaidCode.trim();
+        } else {
+            console.error(`[Mermaid Generator] Ошибка ответа LLM для ${imagePath}:`, response.status, response.data);
+            return null;
+        }
+    } catch (error) {
+        console.error(`[Mermaid Generator] Ошибка обработки изображения ${imagePath}:`, error.response ? error.response.data : error.message);
+        return null;
+    }
+}
+
+async function processAndReplaceImages(mdContent, mdFilePath) {
+    console.log(`[Main Processor] Начало обработки файла (замена изображений): ${mdFilePath}`);
+    const mdDir = path.dirname(mdFilePath);
+    let processedMdContent = mdContent;
+    const imageReplacements = []; // Store { placeholder, mermaidCode }
+
+    // Regex to find <img> tags, capturing src
+    const imgRegex = /<img\\s+[^>]*?src=(?:\"([^\"]+)\"|\'([^\']+)\')[^>]*>/gi;
+    let match;
+
+    console.log(`[Main Processor] Поиск HTML <img> тегов...`);
+    const promises = [];
+
+    while ((match = imgRegex.exec(mdContent)) !== null) {
+        const fullMatch = match[0];
+        const imgSrc = match[1] || match[2]; // Get src value from quotes
+
+        if (!imgSrc) continue;
+
+        const isSvg = imgSrc.toLowerCase().endsWith('.svg');
+
+        if (isSvg && SKIP_SVG) {
+            console.log(`[Main Processor] Пропущен SVG HTML тег: ${fullMatch}`);
+            continue;
+        }
+        if (isSvg && !SKIP_SVG) {
+             console.log(`[Main Processor] Обработка SVG тега: ${fullMatch} (пропуск LLM)`);
+             // Optionally handle SVG differently if needed, e.g., keep the tag
+             continue;
+        }
+
+        console.log(`[Main Processor] Найдено совпадение HTML img (не SVG): ${fullMatch}`);
+        const absoluteImagePath = path.resolve(mdDir, imgSrc);
+        const placeholder = `%%%MERMAID_PLACEHOLDER_${imageReplacements.length}%%%`;
+        processedMdContent = processedMdContent.replace(fullMatch, placeholder);
+
+        // Push the promise to the array
+        promises.push(
+            (async () => {
+                console.log(`[Main Processor] Обработка изображения: ${imgSrc} (ожидаем ответ LLM)`);
+                const mermaidCode = await getMermaidDiagramFromImage(absoluteImagePath);
+                if (mermaidCode) {
+                    imageReplacements.push({ placeholder, mermaidCode });
+                } else {
+                    // If failed, maybe put back the original tag or a comment?
+                    console.warn(`[Main Processor] Не удалось сгенерировать Mermaid для ${imgSrc}. Placeholder останется.`);
+                    // Keep placeholder for now, could be replaced with original later if needed
+                }
+            })()
+        );
+    }
+
+    console.log(`[Main Processor] Найдено ${promises.length} HTML <img> тегов (не SVG) для обработки.`);
+
+    // Wait for all LLM calls to complete
+    await Promise.all(promises);
+    console.log(`[Main Processor] Все запросы к LLM для изображений завершены.`);
+
+    // Apply replacements
+    console.log(`[Main Processor] Применение ${imageReplacements.length} замен...`);
+    imageReplacements.forEach(({ placeholder, mermaidCode }) => {
+        processedMdContent = processedMdContent.replace(placeholder, `\n\`\`\`mermaid\n${mermaidCode}\n\`\`\`\n`);
+    });
+
+    console.log(`[Main Processor] Обработка файла ${mdFilePath} (замена изображений) завершена.`);
+    return processedMdContent;
+}
+
+// --- Markdown Splitting Logic --- (Restored)
+function splitMarkdownIntoChunks(markdownContent, minLength, maxLength, splitHeaders) {
+    const processor = unified().use(remarkParse).use(remarkStringify);
+    const tree = processor.parse(markdownContent);
+    const chunks = [];
+    const warnings = [];
+    let currentChunkContent = [];
+    let currentChunkLength = 0;
+    let currentChunkHeaders = []; // Store headers leading to the current chunk
+
+    function stringifyNodes(nodes) {
+        if (!nodes || nodes.length === 0) return '';
+        // Create a temporary root node to stringify children
+        const tempTree = { type: 'root', children: nodes }; 
+        return processor.stringify(tempTree).trim();
+    }
+
+    function addChunk() {
+        if (currentChunkContent.length > 0) {
+            const chunkText = stringifyNodes(currentChunkContent);
+            const chunkLength = chunkText.length;
+            
+            if (chunkLength > 0) { // Only add non-empty chunks
+                 // Prepend headers to the chunk text
+                const headerText = currentChunkHeaders.map(h => processor.stringify(h)).join('\n\n');
+                const finalChunkText = headerText ? `${headerText}\n\n${chunkText}` : chunkText;
+                const finalChunkLength = finalChunkText.length;
+
+                chunks.push(finalChunkText);
+                
+                 // Check length constraints and issue warnings
+                if (finalChunkLength < minLength) {
+                    warnings.push(`Final chunk ${chunks.length} is smaller than min length (${finalChunkLength} < ${minLength}). Headers: ${currentChunkHeaders.map(h => hastToString(h)).join(' > ')}`);
+                }
+                if (finalChunkLength > maxLength) {
+                     // This warning might occur if a single paragraph/block is too large
+                    warnings.push(`Final chunk ${chunks.length} exceeds max length (${finalChunkLength} > ${maxLength}) possibly due to large paragraph/block. Headers: ${currentChunkHeaders.map(h => hastToString(h)).join(' > ')}`);
+                }
+            }
+        }
+        currentChunkContent = [];
+        currentChunkLength = 0;
+        // Headers are managed by the visit function
+    }
+
+    visit(tree, (node) => {
+        if (node.type === 'heading') {
+            const headerLevel = `h${node.depth}`;
+            // Update current header hierarchy
+            while (currentChunkHeaders.length >= node.depth) {
+                 currentChunkHeaders.pop();
+            }
+            currentChunkHeaders.push(node);
+            
+            // If this header type is a split point AND the current chunk has content
+            if (splitHeaders.includes(headerLevel) && currentChunkLength >= minLength) {
+                addChunk(); // Finalize the previous chunk
+            }
+             // Add the header itself to the new chunk content (handled below)
+        }
+        
+        // Stringify the current node to estimate its length
+        const nodeText = processor.stringify(node);
+        const nodeLength = nodeText.length;
+        
+        // Check if adding this node exceeds max length (and we already have min length)
+        if (currentChunkLength >= minLength && (currentChunkLength + nodeLength) > maxLength && currentChunkContent.length > 0) {
+           addChunk(); // Finalize the previous chunk before adding this node
+           // Carry over headers to the new chunk started by this node
+        }
+        
+        // Add the node to the current chunk
+        currentChunkContent.push(node);
+        currentChunkLength += nodeLength;
+    });
+
+    // Add the last remaining chunk
+    addChunk();
+
+    console.log(`[Splitter] Splitting complete. Generated ${chunks.length} chunks.`);
+    return { chunks, warnings };
+}
+
 // --- Main Preprocessing Logic ---
 async function preprocessModule(targetModuleId) {
   console.log(`[Preprocess] Starting preprocessing for module: ${targetModuleId}`);
@@ -201,14 +414,11 @@ async function preprocessModule(targetModuleId) {
 
     // 5. Process MD files (Original and Converted) for image replacement and splitting
     console.log(`[Preprocess] Searching for all .md files (original and converted) in ${tempSourceModuleDir}...`);
-    // Search in root of module dir and in converted_md subdir
     const mdFiles = await glob([`*.md`, `${CONVERTED_MD_SUBDIR}/*.md`], { cwd: tempSourceModuleDir, absolute: true });
-    // Make unique in case an original MD has the same name as a converted one (unlikely)
     const uniqueMdFiles = [...new Set(mdFiles)];
     console.log(`[Preprocess] Found ${uniqueMdFiles.length} unique .md files to process.`);
 
     let totalChunksGenerated = 0;
-    // Ensure the FINAL chunks output directory exists in the persistent storage
     await fs.ensureDir(finalChunksOutputDir);
     await fs.emptyDir(finalChunksOutputDir); // Clear old chunks before saving new ones
 
@@ -216,41 +426,44 @@ async function preprocessModule(targetModuleId) {
         const relativeMdPath = path.relative(tempSourceModuleDir, mdFilePath);
         console.log(`[Preprocess] Processing MD file: ${relativeMdPath}`);
         
-        // --- Image Processing & Splitting Logic (Operates on mdFilePath within temp dir) --- 
-        // ... (The logic inside processMdFile needs minor path adjustments if it assumes cwd) ...
-        // For now, assume processMdFile takes absolute path and returns chunks
-        // NOTE: We'll skip actual image processing for now to focus on flow
+        // --- Image Processing & Splitting Logic --- 
         console.log(`  [Step 1/3] Read file content...`);
-        const fileContent = await fs.readFile(mdFilePath, 'utf8');
-        console.log(`  [Step 2/3] Image replacement SKIPPED (for flow test).`);
-        const processedContent = fileContent; // Placeholder
-        console.log(`  [Step 3/3] Splitting into chunks...`);
-        const { chunks, warnings } = splitMarkdownIntoChunks(processedContent, MIN_CHUNK_LENGTH, MAX_CHUNK_LENGTH, SPLIT_HEADERS);
-        warnings.forEach(warning => console.warn(`[Splitter Warn] ${warning}`)); // Log warnings
+        let fileContent = await fs.readFile(mdFilePath, 'utf8');
+        console.log(`    Read ${fileContent.length} characters.`);
+        
+        console.log(`  [Step 2/3] Replacing images with Mermaid diagrams (calling LLM)...`);
+        // Pass absolute path for image resolution within processAndReplaceImages
+        const processedContentWithMermaid = await processAndReplaceImages(fileContent, mdFilePath); 
+        console.log(`  [Step 2/3] Image replacement finished.`);
+
+        console.log(`  [Step 3/3] Splitting into chunks (Min: ${MIN_CHUNK_LENGTH}, Max: ${MAX_CHUNK_LENGTH})...`);
+        // Use the restored splitting logic
+        const { chunks, warnings } = splitMarkdownIntoChunks(processedContentWithMermaid, MIN_CHUNK_LENGTH, MAX_CHUNK_LENGTH, SPLIT_HEADERS);
+        warnings.forEach(warning => console.warn(`[Splitter Warn] ${warning} (File: ${relativeMdPath})`)); // Log warnings with file context
         console.log(`[Step 3/3] Generated ${chunks.length} chunks from ${relativeMdPath}.`);
         
         // 6. Save Chunks to FINAL Persistent Directory
         const baseOutputFilename = sanitizeFilename(path.basename(relativeMdPath, '.md'));
-        const chunkFilePrefix = `${baseOutputFilename}_chunk`;
+        const fileSpecificFinalChunkDir = path.join(finalChunksOutputDir, baseOutputFilename);
+        // Ensure the directory for THIS file's chunks exists in persistent storage
+        await fs.ensureDir(fileSpecificFinalChunkDir);
+        
         let savedChunkCount = 0;
         for (let i = 0; i < chunks.length; i++) {
             const chunkContent = chunks[i];
-            // Pad index for consistent sorting
-            const chunkIndex = String(i).padStart(3, '0'); 
-            // Add unique identifier (like original section index if available) or just index
-            // Assuming splitMarkdownIntoChunks provides simple index for now
-            const chunkFilename = `${chunkFilePrefix}_${chunkIndex}_${i}.md`; 
-            const finalChunkPath = path.join(finalChunksOutputDir, baseOutputFilename, chunkFilename);
-            
+            const chunkIndex = String(i).padStart(3, '0');
+            // Use a simpler filename for now, can be enhanced with metadata later
+            const chunkFilename = `${baseOutputFilename}_chunk_${chunkIndex}.md`;
+            const finalChunkPath = path.join(fileSpecificFinalChunkDir, chunkFilename);
+
             try {
-                await fs.ensureDir(path.dirname(finalChunkPath)); // Ensure subdirectory for file exists
                 await fs.writeFile(finalChunkPath, chunkContent);
                 savedChunkCount++;
             } catch (writeError) {
                 console.error(`[Preprocess] Error saving chunk ${chunkFilename} to ${finalChunkPath}: ${writeError.message}`);
             }
         }
-        console.log(`[Step 4/3] Saved ${savedChunkCount} chunks to: ${path.relative(process.cwd(), path.dirname(path.join(finalChunksOutputDir, baseOutputFilename)))}`);
+        console.log(`[Step 4/3] Saved ${savedChunkCount} chunks to: ${path.relative(process.cwd(), fileSpecificFinalChunkDir)}`);
         totalChunksGenerated += savedChunkCount;
         // --- End Image Processing & Splitting --- 
     }
@@ -276,39 +489,6 @@ async function preprocessModule(targetModuleId) {
     console.log(`[Preprocess] Finished preprocessing attempt for module: ${targetModuleId}`);
   }
 }
-
-// --- Markdown Splitting Logic --- (Simplified for brevity, assumes it exists)
-function splitMarkdownIntoChunks(markdownContent, minLength, maxLength, splitHeaders) {
-    // Placeholder: This function should contain the actual splitting logic
-    // based on headers and length constraints.
-    // It should return { chunks: [string], warnings: [string] }
-    console.warn("[Splitter] Actual splitting logic is a placeholder.");
-    // Simple split by H1/H2 for placeholder
-    const lines = markdownContent.split('\n');
-    const chunks = [];
-    let currentChunk = '';
-    for (const line of lines) {
-        if ((line.startsWith('# ') || line.startsWith('## ')) && currentChunk.length > 100) { // Arbitrary split point
-            chunks.push(currentChunk.trim());
-            currentChunk = line + '\n';
-        } else {
-            currentChunk += line + '\n';
-        }
-    }
-    if (currentChunk.trim()) {
-        chunks.push(currentChunk.trim());
-    }
-    return { chunks: chunks.filter(c => c.length > 0), warnings: [] }; // Return empty warnings for placeholder
-}
-
-// --- Image Processing Logic --- (Placeholder)
-async function processAndReplaceImages(mdContent, mdFilePath, moduleBaseDir) {
-    // Placeholder for the complex logic involving finding <img>,
-    // calling LLM, generating Mermaid, and replacing.
-    console.warn("[Image Processor] Image processing logic is a placeholder.");
-    return mdContent; // Return original content for now
-}
-
 
 // --- Run the script ---
 console.log(`[Preprocess Script] Invoked for module: ${moduleId}`);
