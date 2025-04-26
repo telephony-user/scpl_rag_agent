@@ -10,8 +10,16 @@ COPY package*.json ./
 # Install project dependencies
 RUN npm install
 
+# Install additional dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pandoc \
+ && rm -rf /var/lib/apt/lists/*
+
 # Copy the rest of the application code
 COPY . .
 
-# Define the command to run the application (replace with your actual entry point)
-CMD [ "node", "src/index.js" ] 
+# Expose the port the app runs on (for webhook listener)
+EXPOSE 3000
+
+# Define the command to run the application (make sure this is the desired default command)
+CMD [ "node", "src/server.js" ] # Runs the webhook server by default 

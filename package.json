@@ -1,12 +1,15 @@
 {
   "name": "scpl-full-proj",
   "version": "1.0.0",
+  "type": "module",
   "main": "index.js",
   "directories": {
     "doc": "docs",
     "test": "tests"
   },
   "scripts": {
+    "preprocess": "node scripts/preprocess.mjs",
+    "start:server": "node src/server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -16,8 +19,23 @@
   "dependencies": {
     "@qdrant/qdrant-js": "^1.14.0",
     "@supabase/supabase-js": "^2.49.4",
+    "axios": "^1.8.4",
     "dotenv": "^16.5.0",
+    "express": "^4.19.2",
+    "fs-extra": "^11.3.0",
+    "glob": "^11.0.2",
+    "hast-util-to-string": "^3.0.1",
+    "mdast-util-to-markdown": "^2.1.2",
     "pino": "^9.6.0",
-    "simple-git": "^3.27.0"
+    "rehype-remark": "^10.0.1",
+    "rehype-stringify": "^10.0.1",
+    "remark": "^15.0.1",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.1.2",
+    "remark-stringify": "^11.0.0",
+    "simple-git": "^3.27.0",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.0.0",
+    "yargs": "^17.7.2"
   }
 }
