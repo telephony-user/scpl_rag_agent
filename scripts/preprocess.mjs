@@ -150,11 +150,11 @@ async function convertDocxToMd(docxPath, outputDir, moduleDir) {
   });
 }
 
-// --- Image Processing Logic --- (Restored)
+// --- Image Processing Logic --- (Less strict response handling)
 async function getMermaidDiagramFromImage(imagePath, contextText = '') {
     if (!LLM_IMAGE_ENDPOINT || !LLM_API_KEY) {
         console.warn('[Mermaid Generator] LLM endpoint or API key not configured. Skipping image processing.');
-        return null;
+        return null; // Return null on config error
     }
     console.log(`[Mermaid Generator] Начало генерации для ${imagePath}`);
     try {
@@ -162,8 +162,6 @@ async function getMermaidDiagramFromImage(imagePath, contextText = '') {
         const imageBuffer = await fs.readFile(imagePath);
         const base64Image = imageBuffer.toString('base64');
         console.log(`[Mermaid Generator] Файл изображения ${imagePath} успешно прочитан.`);
-
-        // Basic MIME type detection from extension
         const ext = path.extname(imagePath).toLowerCase();
         let mimeType = 'application/octet-stream';
         if (ext === '.png') mimeType = 'image/png';
@@ -186,27 +184,35 @@ async function getMermaidDiagramFromImage(imagePath, contextText = '') {
             }
         });
 
-        if (response.status === 200 && response.data && response.data.response) {
-             // Extract Mermaid code, removing backticks and 'mermaid' label if present
-            let mermaidCode = response.data.response.trim();
-            if (mermaidCode.startsWith('```mermaid')) {
-                mermaidCode = mermaidCode.substring('```mermaid'.length);
+        // Less strict check: If request succeeded (status 200) and data.response exists, try to use it.
+        if (response.status === 200 && response.data && typeof response.data.response === 'string') {
+            console.log(`[Mermaid Generator] Получен ответ от LLM для ${imagePath}. Статус: ${response.status}. Извлечение текста...`);
+            let rawResponseText = response.data.response.trim();
+            
+            // Trim backticks and 'mermaid' label
+            if (rawResponseText.startsWith('```mermaid')) {
+                rawResponseText = rawResponseText.substring('```mermaid'.length);
             }
-            if (mermaidCode.startsWith('```')) {
-                 mermaidCode = mermaidCode.substring(3);
+            if (rawResponseText.startsWith('```')) {
+                 rawResponseText = rawResponseText.substring(3);
             }
-             if (mermaidCode.endsWith('```')) {
-                mermaidCode = mermaidCode.substring(0, mermaidCode.length - 3);
+             if (rawResponseText.endsWith('```')) {
+                rawResponseText = rawResponseText.substring(0, rawResponseText.length - 3);
             }
-            console.log(`[Mermaid Generator] Успешно получен Mermaid код для ${imagePath}.`);
-            return mermaidCode.trim();
+            const resultText = rawResponseText.trim(); 
+            console.log(`[Mermaid Generator] Извлеченный текст (может быть пустым или не Mermaid): "${resultText.substring(0, 100)}..."`);
+            return resultText; // Return the processed text, even if empty
         } else {
-            console.error(`[Mermaid Generator] Ошибка ответа LLM для ${imagePath}:`, response.status, response.data);
-            return null;
+            // Log unexpected success response format or status code other than 200
+            console.error(`[Mermaid Generator] Неожиданный формат ответа или статус от LLM для ${imagePath}. Статус: ${response.status}, Тело ответа:`, response.data);
+            return null; // Indicate failure to get expected data
         }
     } catch (error) {
-        console.error(`[Mermaid Generator] Ошибка обработки изображения ${imagePath}:`, error.response ? error.response.data : error.message);
-        return null;
+        // Log network/request errors
+        console.error(`[Mermaid Generator] Ошибка при запросе к LLM для ${imagePath}:`, error.response ? error.response.data : error.message);
+        // Log stack trace for network errors
+        if (error.stack) { console.error(error.stack); } 
+        return null; // Return null on error
     }
 }
 
@@ -270,11 +276,16 @@ async function processAndReplaceImages(mdContent, mdFilePath) {
         promises.push(
             (async () => {
                 console.log(`[Main Processor] Обработка изображения: ${imgSrc} (ожидаем ответ LLM)`);
-                const mermaidCode = await getMermaidDiagramFromImage(absoluteImagePath);
-                if (mermaidCode) {
-                    imageReplacements.push({ placeholder, mermaidCode });
+                const llmResultText = await getMermaidDiagramFromImage(absoluteImagePath);
+                // Add replacement if LLM call didn't result in null (i.e., no network/config error)
+                if (llmResultText !== null) { 
+                    imageReplacements.push({ placeholder, mermaidCode: llmResultText }); // Store the raw result
+                    if (llmResultText === '') {
+                         console.warn(`[Main Processor] LLM вернул пустой текст для ${imgSrc} после очистки. Будет вставлен пустой блок Mermaid.`);
+                    }
                 } else {
-                    console.warn(`[Main Processor] Не удалось сгенерировать Mermaid для ${imgSrc}. Placeholder останется.`);
+                    // Log failure if getMermaidDiagramFromImage returned null
+                    console.error(`[Main Processor] Не удалось получить ответ от LLM для ${imgSrc} из-за ошибки конфигурации или сети. Placeholder останется.`);
                 }
             })()
         );
@@ -291,9 +302,11 @@ async function processAndReplaceImages(mdContent, mdFilePath) {
     }
 
     // Apply replacements
-    console.log(`[Main Processor] Применение ${imageReplacements.length} замен (успешно сгенерированных Mermaid)...`);
+    console.log(`[Main Processor] Применение ${imageReplacements.length} замен (непроверенных ответов LLM)...`);
     imageReplacements.forEach(({ placeholder, mermaidCode }) => {
-        processedMdContent = processedMdContent.replace(placeholder, `\n\`\`\`mermaid\n${mermaidCode}\n\`\`\`\n`);
+        // Ensure mermaidCode is a string, default to empty if somehow it isn't (though should be handled above)
+        const codeToInsert = typeof mermaidCode === 'string' ? mermaidCode : ''; 
+        processedMdContent = processedMdContent.replace(placeholder, `\n\`\`\`mermaid\n${codeToInsert}\n\`\`\`\n`);
     });
 
     console.log(`[Main Processor] Обработка файла ${mdFilePath} (замена изображений) завершена.`);
