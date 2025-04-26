@@ -150,11 +150,11 @@ async function convertDocxToMd(docxPath, outputDir, moduleDir) {
   });
 }
 
-// --- Image Processing Logic --- (Less strict response handling)
+// --- Image Processing Logic --- (Using messages format for image)
 async function getMermaidDiagramFromImage(imagePath, contextText = '') {
     if (!LLM_IMAGE_ENDPOINT || !LLM_API_KEY) {
         console.warn('[Mermaid Generator] LLM endpoint or API key not configured. Skipping image processing.');
-        return null; // Return null on config error
+        return null;
     }
     console.log(`[Mermaid Generator] Начало генерации для ${imagePath}`);
     try {
@@ -170,13 +170,31 @@ async function getMermaidDiagramFromImage(imagePath, contextText = '') {
         else if (ext === '.webp') mimeType = 'image/webp';
         console.log(`[Mermaid Generator] Определен MIME-тип: ${mimeType} для ${imagePath}`);
 
+        // Construct the request body using the standard messages format for vision models
         const requestBody = {
             model: LLM_MODEL_NAME,
-            prompt: `Generate a Mermaid diagram code representing the content of this image. ${contextText ? 'Context: ' + contextText : ''}`,
-            images: [base64Image]
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: `Generate a Mermaid diagram code representing the content of this image. ${contextText ? 'Context: ' + contextText : ''}`
+                        },
+                        {
+                            type: "image_url",
+                            image_url: {
+                                url: `data:${mimeType};base64,${base64Image}`
+                            }
+                        }
+                    ]
+                }
+            ],
+            // Optionally add max_tokens if needed, e.g.:
+            // max_tokens: 1024 
         };
 
-        console.log(`[Mermaid Generator] Запрос к LLM (${LLM_MODEL_NAME}) для ${imagePath}...`);
+        console.log(`[Mermaid Generator] Запрос к LLM (${LLM_MODEL_NAME}) для ${imagePath} с использованием формата messages...`);
         const response = await axios.post(LLM_IMAGE_ENDPOINT, requestBody, {
             headers: {
                 'Authorization': `Bearer ${LLM_API_KEY}`,
@@ -184,32 +202,46 @@ async function getMermaidDiagramFromImage(imagePath, contextText = '') {
             }
         });
 
-        // Less strict check: If request succeeded (status 200) and data.response exists, try to use it.
-        if (response.status === 200 && response.data && typeof response.data.response === 'string') {
-            console.log(`[Mermaid Generator] Получен ответ от LLM для ${imagePath}. Статус: ${response.status}. Извлечение текста...`);
-            let rawResponseText = response.data.response.trim();
-            
+        // Check response structure: look for choices[0].message.content or choices[0].text
+        let resultText = null;
+        if (response.status === 200 && response.data && Array.isArray(response.data.choices) && response.data.choices.length > 0) {
+            const choice = response.data.choices[0];
+            if (choice.message && typeof choice.message.content === 'string') {
+                resultText = choice.message.content;
+                console.log(`[Mermaid Generator] Получен ответ от LLM (из message.content) для ${imagePath}. Статус: ${response.status}.`);
+            } else if (typeof choice.text === 'string') { // Fallback for models that might use choice.text
+                resultText = choice.text;
+                console.log(`[Mermaid Generator] Получен ответ от LLM (из choice.text) для ${imagePath}. Статус: ${response.status}.`);
+            } else {
+                console.error(`[Mermaid Generator] Неожиданная структура ответа (choices[0] не содержит message.content или text) от LLM для ${imagePath}. Тело ответа:`, response.data);
+            }
+        } else {
+            console.error(`[Mermaid Generator] Неожиданный формат ответа или статус от LLM для ${imagePath}. Статус: ${response.status}, Тело ответа:`, response.data);
+        }
+
+        // Process the extracted text if found
+        if (resultText !== null) {
+            let rawResponseText = resultText.trim();
             // Trim backticks and 'mermaid' label
             if (rawResponseText.startsWith('```mermaid')) {
                 rawResponseText = rawResponseText.substring('```mermaid'.length);
             }
             if (rawResponseText.startsWith('```')) {
-                 rawResponseText = rawResponseText.substring(3);
+                rawResponseText = rawResponseText.substring(3);
             }
-             if (rawResponseText.endsWith('```')) {
+            if (rawResponseText.endsWith('```')) {
                 rawResponseText = rawResponseText.substring(0, rawResponseText.length - 3);
             }
-            const resultText = rawResponseText.trim(); 
-            console.log(`[Mermaid Generator] Извлеченный текст (может быть пустым или не Mermaid): "${resultText.substring(0, 100)}..."`);
-            return resultText; // Return the processed text, even if empty
+            const cleanedText = rawResponseText.trim();
+            console.log(`[Mermaid Generator] Извлеченный и очищенный текст: "${cleanedText.substring(0, 100)}..."`);
+            return cleanedText; // Return the processed text
         } else {
-            // Log unexpected success response format or status code other than 200
-            console.error(`[Mermaid Generator] Неожиданный формат ответа или статус от LLM для ${imagePath}. Статус: ${response.status}, Тело ответа:`, response.data);
-            return null; // Indicate failure to get expected data
+            return null; // Indicate failure to get valid text
         }
+
     } catch (error) {
         // Log network/request errors
-        console.error(`[Mermaid Generator] Ошибка при запросе к LLM для ${imagePath}:`, error.response ? error.response.data : error.message);
+        console.error(`[Mermaid Generator] Ошибка при запросе к LLM для ${imagePath}:`, error.response ? JSON.stringify(error.response.data) : error.message);
         // Log stack trace for network errors
         if (error.stack) { console.error(error.stack); } 
         return null; // Return null on error
