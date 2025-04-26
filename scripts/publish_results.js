@@ -54,163 +54,182 @@ const moduleId = argv.module;
 
 // --- Main Publishing Logic ---
 async function publishResultsToDocsRepo(targetModuleId) {
-  console.log(`[PublishDocs] Starting publishing results for module: ${targetModuleId} back to Docs Repo`);
-
-  if (!DOCS_REPO_URL) {
-      console.error('[PublishDocs] Error: GIT_REPO_URL environment variable is not set. Cannot publish results.');
-      process.exit(1);
-  }
-
-  // Check if authentication is already embedded in the URL
-  let isAuthEmbeddedInUrl = false;
-  try {
-      const url = new URL(DOCS_REPO_URL);
-      if (url.password || url.username) { // Check for username/password in URL
-          // Check specifically for common token patterns if desired, but presence is enough for now
-          if (DOCS_REPO_URL.includes('@')) {
-             console.log('[PublishDocs] Detected authentication info embedded in GIT_REPO_URL.');
-             isAuthEmbeddedInUrl = true;
-          }
-      }
-  } catch (e) {
-       console.warn('[PublishDocs] Could not parse GIT_REPO_URL to check for embedded auth. Assuming separate auth is needed.');
-  }
-
-  // Check for explicit auth methods ONLY if auth is not embedded in URL
-  if (!isAuthEmbeddedInUrl && !GIT_DOCS_WRITE_SSH_KEY_PATH && !GIT_DOCS_WRITE_PUSH_TOKEN) {
-      console.error('[PublishDocs] Error: No authentication method provided (GIT_DOCS_WRITE_SSH_KEY_PATH or GIT_DOCS_WRITE_PUSH_TOKEN required, or embed auth in GIT_REPO_URL).');
-      process.exit(1);
-  }
-
-  const localSourceChunksDir = path.resolve(process.cwd(), SOURCE_MD_ROOT_DIR, targetModuleId, CHUNKS_OUTPUT_SUBDIR);
-  let tempRepoPath = '';
+  console.log(`[PublishDocs ${targetModuleId}] Starting publishing results back to Docs Repo`);
+  let tempRepoPath = ''; // Define path outside try block for finally
 
   try {
+      // --- Authentication Checks (remain the same) ---
+       if (!DOCS_REPO_URL) {
+          console.error(`[PublishDocs ${targetModuleId}] Error: GIT_REPO_URL environment variable is not set. Cannot publish results.`);
+          process.exit(1);
+       }
+       let isAuthEmbeddedInUrl = false;
+       try {
+           const url = new URL(DOCS_REPO_URL);
+           if (url.password || url.username) {
+               if (DOCS_REPO_URL.includes('@')) {
+                  console.log(`[PublishDocs ${targetModuleId}] Detected authentication info embedded in GIT_REPO_URL.`);
+                  isAuthEmbeddedInUrl = true;
+               }
+           }
+       } catch (e) {
+            console.warn(`[PublishDocs ${targetModuleId}] Could not parse GIT_REPO_URL to check for embedded auth. Assuming separate auth is needed.`);
+       }
+       if (!isAuthEmbeddedInUrl && !GIT_DOCS_WRITE_SSH_KEY_PATH && !GIT_DOCS_WRITE_PUSH_TOKEN) {
+           console.error(`[PublishDocs ${targetModuleId}] Error: No authentication method provided (GIT_DOCS_WRITE_SSH_KEY_PATH or GIT_DOCS_WRITE_PUSH_TOKEN required, or embed auth in GIT_REPO_URL).`);
+           process.exit(1);
+       }
+      // --- End Authentication Checks ---
+
+      const localSourceChunksDir = path.resolve(process.cwd(), SOURCE_MD_ROOT_DIR, targetModuleId, CHUNKS_OUTPUT_SUBDIR);
+      console.log(`[PublishDocs ${targetModuleId}] Local source chunks directory: ${localSourceChunksDir}`);
+
+      // Create temporary directory
       tempRepoPath = await fs.mkdtemp(path.join(os.tmpdir(), `publish-docs-${targetModuleId}-`));
+      console.log(`[PublishDocs ${targetModuleId}] Created temporary clone directory: ${tempRepoPath}`);
+      
       const targetChunksDirInRepo = path.resolve(tempRepoPath, targetModuleId, CHUNKS_OUTPUT_SUBDIR);
+      console.log(`[PublishDocs ${targetModuleId}] Target directory in clone: ${targetChunksDirInRepo}`);
 
-      console.log(`[PublishDocs] Local source chunks directory: ${localSourceChunksDir}`);
-      console.log(`[PublishDocs] Temporary clone directory: ${tempRepoPath}`);
-      console.log(`[PublishDocs] Target directory in clone: ${targetChunksDirInRepo}`);
-
+      // --- Git Setup (remain the same) ---
       let gitOptions = {
           baseDir: tempRepoPath,
           binary: 'git',
           maxConcurrentProcesses: 6,
           config: []
       };
-
       let gitRepoUrl = DOCS_REPO_URL;
       let gitEnv = { ...process.env };
-
-      // --- Configure Git Authentication ONLY IF NOT EMBEDDED IN URL --- 
       if (!isAuthEmbeddedInUrl) {
             if (GIT_DOCS_WRITE_SSH_KEY_PATH) {
-                console.log(`[PublishDocs] Configuring Git SSH key authentication (WRITE) using path: ${GIT_DOCS_WRITE_SSH_KEY_PATH}`);
-                try {
+                 console.log(`[PublishDocs ${targetModuleId}] Configuring Git SSH key authentication (WRITE) using path: ${GIT_DOCS_WRITE_SSH_KEY_PATH}`);
+                 try {
                     await fs.access(GIT_DOCS_WRITE_SSH_KEY_PATH);
-                    gitEnv.GIT_SSH_COMMAND = `ssh -i \"${GIT_DOCS_WRITE_SSH_KEY_PATH}\" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`;
-                    console.log(`[PublishDocs] GIT_SSH_COMMAND set for SSH operations.`);
+                    gitEnv.GIT_SSH_COMMAND = `ssh -i "${GIT_DOCS_WRITE_SSH_KEY_PATH}" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`;
+                    console.log(`[PublishDocs ${targetModuleId}] GIT_SSH_COMMAND set for SSH operations.`);
                     gitOptions.config.push('core.sshCommand=ssh');
                 } catch (keyError) {
-                    console.error(`[PublishDocs] Error accessing SSH key (WRITE) at ${GIT_DOCS_WRITE_SSH_KEY_PATH}: ${keyError.message}.`);
-                    throw keyError; // Propagate error
+                    console.error(`[PublishDocs ${targetModuleId}] Error accessing SSH key (WRITE) at ${GIT_DOCS_WRITE_SSH_KEY_PATH}: ${keyError.message}.`);
+                    throw keyError; 
                 }
             } else if (GIT_DOCS_WRITE_PUSH_TOKEN) {
-                console.log("[PublishDocs] Configuring Git HTTPS token authentication (WRITE).");
+                 console.log(`[PublishDocs ${targetModuleId}] Configuring Git HTTPS token authentication (WRITE).`);
                 try {
-                    const url = new URL(gitRepoUrl); // Use original URL here
+                    const url = new URL(gitRepoUrl);
                     url.password = GIT_DOCS_WRITE_PUSH_TOKEN;
-                    url.username = 'token'; // Adjust if necessary for provider
-                    gitRepoUrl = url.toString(); // Modify the URL ONLY if using separate token
-                    console.log("[PublishDocs] Using URL modified with explicit token for HTTPS operations.");
+                    url.username = 'token'; 
+                    gitRepoUrl = url.toString(); 
+                    console.log(`[PublishDocs ${targetModuleId}] Using URL modified with explicit token for HTTPS operations.`);
                 } catch (urlError) {
-                    console.error(`[PublishDocs] Error parsing GIT_REPO_URL for explicit token injection: ${urlError.message}.`);
-                    throw urlError; // Propagate error
+                    console.error(`[PublishDocs ${targetModuleId}] Error parsing GIT_REPO_URL for explicit token injection: ${urlError.message}.`);
+                    throw urlError; 
                 }
             }
       }
-      // --- End Auth Configuration ---
-
       gitOptions.env = gitEnv;
+      // --- End Git Setup ---
+      
       const git = simpleGit(gitOptions);
 
-      // 1. Clone the Docs Repository (using potentially modified gitRepoUrl)
-      console.log(`[PublishDocs] Cloning ${gitRepoUrl} (branch: ${TARGET_BRANCH}) into ${tempRepoPath}...`);
+      // 1. Clone the Docs Repository
+      console.log(`[PublishDocs ${targetModuleId}] Attempting to clone ${gitRepoUrl} (branch: ${TARGET_BRANCH}) into ${tempRepoPath}...`);
       try {
           await git.clone(gitRepoUrl, '.', [
               `--branch=${TARGET_BRANCH}`,
               '--single-branch',
               '--depth=1'
           ]);
-          console.log(`[PublishDocs] Successfully cloned docs repository.`);
+          console.log(`[PublishDocs ${targetModuleId}] Successfully cloned docs repository.`);
       } catch (cloneError) {
-          console.error(`[PublishDocs] Error cloning docs repository/branch: ${cloneError.message}. Check URL, branch, and auth.`);
+          console.error(`[PublishDocs ${targetModuleId}] Error during git clone operation: ${cloneError.message}. Check URL, branch, and auth. Also check temporary directory state.`);
+          // Adding stack trace for more details
+          console.error(cloneError.stack); 
           throw cloneError;
       }
       
-      // 2. Configure Git User for Commit
-      console.log(`[PublishDocs] Configuring git user ${GIT_COMMIT_USER} <${GIT_COMMIT_EMAIL}>...`);
+      // 2. Configure Git User
+      console.log(`[PublishDocs ${targetModuleId}] Attempting to configure git user ${GIT_COMMIT_USER} <${GIT_COMMIT_EMAIL}>...`);
       await git.addConfig('user.name', GIT_COMMIT_USER, false, 'local');
       await git.addConfig('user.email', GIT_COMMIT_EMAIL, false, 'local');
+      console.log(`[PublishDocs ${targetModuleId}] Successfully configured git user.`);
 
       // 3. Prepare Target Directory in Clone
-      console.log(`[PublishDocs] Ensuring target directory exists and clearing old chunks for module ${targetModuleId} in ${targetChunksDirInRepo}...`);
+      console.log(`[PublishDocs ${targetModuleId}] Attempting to ensure target directory exists and clear old chunks in ${targetChunksDirInRepo}...`);
       await fs.ensureDir(targetChunksDirInRepo);
       await fs.emptyDir(targetChunksDirInRepo);
+      console.log(`[PublishDocs ${targetModuleId}] Successfully prepared target directory.`);
 
-      // 4. Copy New Chunk Files from Local Storage to Clone
-      console.log(`[PublishDocs] Copying processed chunks from ${localSourceChunksDir} to ${targetChunksDirInRepo}...`);
+      // 4. Copy New Chunk Files
+      console.log(`[PublishDocs ${targetModuleId}] Attempting to copy processed chunks from ${localSourceChunksDir} to ${targetChunksDirInRepo}...`);
       let copiedFiles = false;
       try {
           await fs.access(localSourceChunksDir);
           await fs.copy(localSourceChunksDir, targetChunksDirInRepo);
-          console.log(`[PublishDocs] Successfully copied chunk files.`);
+          console.log(`[PublishDocs ${targetModuleId}] Successfully copied chunk files.`);
           copiedFiles = true;
       } catch (copyError) {
           if (copyError.code === 'ENOENT') {
-              console.warn(`[PublishDocs] Local source chunk directory ${localSourceChunksDir} not found. Nothing to publish.`);
+              console.warn(`[PublishDocs ${targetModuleId}] Local source chunk directory ${localSourceChunksDir} not found. Nothing to publish.`);
           } else {
+              console.error(`[PublishDocs ${targetModuleId}] Error copying chunks: ${copyError.message}`);
               throw copyError;
           }
       }
 
       // 5. Check for Changes
-      console.log(`[PublishDocs] Checking for changes...`);
+      console.log(`[PublishDocs ${targetModuleId}] Attempting to check git status...`);
       const status = await git.status();
+      console.log(`[PublishDocs ${targetModuleId}] Git status checked. Files changed: ${status.files.length}. Copied new files: ${copiedFiles}`);
 
       if (status.files.length === 0 && !copiedFiles) {
-          console.log(`[PublishDocs] No new files copied and no other changes detected. Nothing to commit or push.`);
+          console.log(`[PublishDocs ${targetModuleId}] No changes detected. Nothing to commit or push.`);
       } else {
-          console.log(`[PublishDocs] Changes detected. Proceeding with commit.`);
+          console.log(`[PublishDocs ${targetModuleId}] Changes detected. Proceeding with commit and push.`);
           // 6. Add, Commit, Push
-          console.log(`[PublishDocs] Adding changes...`);
-          await git.add(`${targetModuleId}/${CHUNKS_OUTPUT_SUBDIR}`);
-          const stagedStatus = await git.status();
+          const filesToAdd = `${targetModuleId}/${CHUNKS_OUTPUT_SUBDIR}`;
+          console.log(`[PublishDocs ${targetModuleId}] Attempting to git add '${filesToAdd}'...`);
+          await git.add(filesToAdd);
+          console.log(`[PublishDocs ${targetModuleId}] Successfully added files.`);
+          
+          console.log(`[PublishDocs ${targetModuleId}] Checking staged status...`);
+          const stagedStatus = await git.status(); // Check status again after add
           if (stagedStatus.staged.length === 0) {
-              console.log(`[PublishDocs] No changes were staged. Skipping commit and push.`);
+              console.log(`[PublishDocs ${targetModuleId}] No changes were actually staged. Skipping commit and push.`);
           } else {
-              console.log(`[PublishDocs] Staged files: ${stagedStatus.staged.join(', ')}`);
-              console.log(`[PublishDocs] Committing changes...`);
+              console.log(`[PublishDocs ${targetModuleId}] Staged files: ${stagedStatus.staged.join(', ')}`);
               const commitMessage = `Update processed chunks for module ${targetModuleId}`;
+              console.log(`[PublishDocs ${targetModuleId}] Attempting to commit with message: "${commitMessage}"...`);
               await git.commit(commitMessage);
-              console.log(`[PublishDocs] Pushing changes to origin/${TARGET_BRANCH}...`);
+              console.log(`[PublishDocs ${targetModuleId}] Successfully committed.`);
+              
+              console.log(`[PublishDocs ${targetModuleId}] Attempting to push to origin/${TARGET_BRANCH}...`);
               await git.push('origin', TARGET_BRANCH);
-              console.log(`[PublishDocs] Successfully pushed results for module ${targetModuleId} to docs repo.`);
+              console.log(`[PublishDocs ${targetModuleId}] Successfully pushed results for module ${targetModuleId} to docs repo.`);
           }
       }
 
   } catch (error) {
-      console.error(`[PublishDocs] Error during publishing operation for module ${targetModuleId}:`, error);
+      // Log the specific error that broke the chain
+      console.error(`[PublishDocs ${targetModuleId}] CRITICAL ERROR during publishing operation:`, error.message);
+      // Also log stack trace for the critical error
+      console.error(error.stack); 
+      // Optionally exit with non-zero code to signal failure more strongly
+      // process.exit(1); 
   } finally {
-      // 7. Clean up temporary directory
+      // 7. Ensure temporary directory is removed
       if (tempRepoPath) {
-          console.log(`[PublishDocs] Cleaning up temporary directory ${tempRepoPath}...`);
-          await fs.remove(tempRepoPath).catch(err => console.error(`Failed to remove temp directory ${tempRepoPath}: ${err}`));
+          console.log(`[PublishDocs ${targetModuleId}] Cleaning up temporary directory ${tempRepoPath}...`);
+          try {
+              await fs.remove(tempRepoPath);
+              console.log(`[PublishDocs ${targetModuleId}] Successfully removed temporary directory.`);
+          } catch (removeError) {
+              console.error(`[PublishDocs ${targetModuleId}] FAILED to remove temporary directory ${tempRepoPath}: ${removeError.message}`);
+          }
       }
-      console.log(`[PublishDocs] Finished publishing attempt for module: ${targetModuleId}`);
+      console.log(`[PublishDocs ${targetModuleId}] Finished publishing attempt.`);
   }
 }
 
 // --- Run the script ---
+console.log(`[PublishScript] Script invoked for module: ${moduleId}`);
 publishResultsToDocsRepo(moduleId); 
