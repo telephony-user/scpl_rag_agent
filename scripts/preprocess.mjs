@@ -216,32 +216,52 @@ async function processAndReplaceImages(mdContent, mdFilePath) {
     let processedMdContent = mdContent;
     const imageReplacements = []; // Store { placeholder, mermaidCode }
 
+    // Log lines containing img tags for debugging
+    console.log(`[Main Processor Debug] Проверка содержимого MD на наличие <img тегов:`);
+    const linesWithImg = mdContent.split('\n').filter(line => line.includes('<img'));
+    if (linesWithImg.length > 0) {
+        linesWithImg.forEach(line => console.log(`[Main Processor Debug] Найдена строка: ${line.trim()}`));
+    } else {
+        console.log(`[Main Processor Debug] Строки с <img не найдены в содержимом.`);
+    }
+    console.log(`[Main Processor Debug] Конец проверки содержимого.`);
+
     // Regex to find <img> tags, capturing src
-    const imgRegex = /<img\\s+[^>]*?src=(?:\"([^\"]+)\"|\'([^\']+)\')[^>]*>/gi;
+    const imgRegex = /<img\\s+[^>]*?src=(?:\\\"([^\\\"]+)\\\"|\'([^\']+)\')[^>]*>/gi;
     let match;
 
-    console.log(`[Main Processor] Поиск HTML <img> тегов...`);
+    console.log(`[Main Processor] Поиск HTML <img> тегов с использованием regex...`);
     const promises = [];
+    let foundNonSvgCount = 0;
+    let skippedSvgCount = 0;
 
     while ((match = imgRegex.exec(mdContent)) !== null) {
         const fullMatch = match[0];
         const imgSrc = match[1] || match[2]; // Get src value from quotes
 
-        if (!imgSrc) continue;
+        if (!imgSrc) {
+            console.log(`[Main Processor Debug] Regex нашел совпадение, но не смог извлечь src: ${fullMatch}`);
+            continue;
+        }
 
+        console.log(`[Main Processor Debug] Regex нашел тег: ${fullMatch} | Извлеченный src: ${imgSrc}`);
         const isSvg = imgSrc.toLowerCase().endsWith('.svg');
 
         if (isSvg && SKIP_SVG) {
             console.log(`[Main Processor] Пропущен SVG HTML тег: ${fullMatch}`);
+            skippedSvgCount++;
             continue;
         }
         if (isSvg && !SKIP_SVG) {
-             console.log(`[Main Processor] Обработка SVG тега: ${fullMatch} (пропуск LLM)`);
-             // Optionally handle SVG differently if needed, e.g., keep the tag
+             console.log(`[Main Processor] Обработка SVG тега (пропуск LLM): ${fullMatch}`);
+             // Keep SVG tag as is for now
+             skippedSvgCount++; // Count as skipped for LLM processing
              continue;
         }
 
-        console.log(`[Main Processor] Найдено совпадение HTML img (не SVG): ${fullMatch}`);
+        // If we reach here, it's a non-SVG image to be processed
+        foundNonSvgCount++;
+        console.log(`[Main Processor] Найдено совпадение HTML img #${foundNonSvgCount} (не SVG): ${fullMatch}`);
         const absoluteImagePath = path.resolve(mdDir, imgSrc);
         const placeholder = `%%%MERMAID_PLACEHOLDER_${imageReplacements.length}%%%`;
         processedMdContent = processedMdContent.replace(fullMatch, placeholder);
@@ -254,22 +274,24 @@ async function processAndReplaceImages(mdContent, mdFilePath) {
                 if (mermaidCode) {
                     imageReplacements.push({ placeholder, mermaidCode });
                 } else {
-                    // If failed, maybe put back the original tag or a comment?
                     console.warn(`[Main Processor] Не удалось сгенерировать Mermaid для ${imgSrc}. Placeholder останется.`);
-                    // Keep placeholder for now, could be replaced with original later if needed
                 }
             })()
         );
     }
 
-    console.log(`[Main Processor] Найдено ${promises.length} HTML <img> тегов (не SVG) для обработки.`);
+    console.log(`[Main Processor] Поиск завершен. Найдено для обработки (не SVG): ${foundNonSvgCount}. Пропущено (SVG или ошибка): ${skippedSvgCount}.`);
 
     // Wait for all LLM calls to complete
-    await Promise.all(promises);
-    console.log(`[Main Processor] Все запросы к LLM для изображений завершены.`);
+    if (promises.length > 0) {
+        await Promise.all(promises);
+        console.log(`[Main Processor] Все запросы к LLM для изображений (${promises.length}) завершены.`);
+    } else {
+         console.log(`[Main Processor] Запросы к LLM не выполнялись.`);
+    }
 
     // Apply replacements
-    console.log(`[Main Processor] Применение ${imageReplacements.length} замен...`);
+    console.log(`[Main Processor] Применение ${imageReplacements.length} замен (успешно сгенерированных Mermaid)...`);
     imageReplacements.forEach(({ placeholder, mermaidCode }) => {
         processedMdContent = processedMdContent.replace(placeholder, `\n\`\`\`mermaid\n${mermaidCode}\n\`\`\`\n`);
     });
