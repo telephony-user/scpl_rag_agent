@@ -21,21 +21,24 @@ async function getEmbeddings(texts, model = 'emb-openai/text-embedding-3-large')
         return [];
     }
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+
     try {
-        // Note: The request body structure might need adjustment based on the specific API requirements.
-        // Common structures include { input: texts } or { texts: texts, model: model }
         const response = await fetch(API_URL, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${API_KEY}`,
             },
-            // Assuming OpenAI-compatible input structure. Adjust if vsegpt.ru differs.
             body: JSON.stringify({
-                input: texts, 
-                model: model // Include model if the API requires it
+                input: texts,
+                model: model
             }),
+            signal: controller.signal
         });
+
+        clearTimeout(timeoutId);
 
         if (!response.ok) {
             const errorBody = await response.text();
@@ -44,22 +47,24 @@ async function getEmbeddings(texts, model = 'emb-openai/text-embedding-3-large')
 
         const data = await response.json();
 
-        // Assuming OpenAI-compatible output structure { data: [{ embedding: [...] }, ...] }
-        // Adjust this based on the actual structure returned by vsegpt.ru API.
         if (!data || !Array.isArray(data.data) || data.data.length !== texts.length) {
             console.error("Unexpected API response structure:", data);
             throw new Error('Unexpected API response structure from embedding service.');
         }
 
-        // Extract embeddings in the correct order
         const embeddings = data.data.map(item => item.embedding);
 
         return embeddings;
 
     } catch (error) {
-        console.error('Error fetching embeddings:', error);
-        // Re-throw the error to be handled by the caller
-        throw error; 
+        clearTimeout(timeoutId);
+        
+        if (error.name === 'AbortError') {
+            console.error('Error fetching embeddings: Request timed out after 60 seconds.');
+        } else {
+             console.error('Error fetching embeddings:', error);
+        }
+        throw error;
     }
 }
 
