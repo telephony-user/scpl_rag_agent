@@ -1,3 +1,5 @@
+import axios from 'axios';
+
 const API_URL = process.env.VSEGPT_API_URL;
 const API_KEY = process.env.VSEGPT_API_KEY;
 
@@ -22,30 +24,26 @@ async function getEmbeddings(texts, model = 'emb-openai/text-embedding-3-large')
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const timeoutId = setTimeout(() => {
+        console.error(`Error fetching embeddings: Request explicitly timed out after 60 seconds.`);
+        controller.abort();
+    }, 60000);
 
     try {
-        const response = await fetch(API_URL, {
-            method: 'POST',
+        const response = await axios.post(API_URL, {
+            input: texts,
+            model: model
+        }, {
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${API_KEY}`,
             },
-            body: JSON.stringify({
-                input: texts,
-                model: model
-            }),
-            signal: controller.signal
+            signal: controller.signal,
         });
 
         clearTimeout(timeoutId);
 
-        if (!response.ok) {
-            const errorBody = await response.text();
-            throw new Error(`API request failed with status ${response.status}: ${errorBody}`);
-        }
-
-        const data = await response.json();
+        const data = response.data;
 
         if (!data || !Array.isArray(data.data) || data.data.length !== texts.length) {
             console.error("Unexpected API response structure:", data);
@@ -58,11 +56,20 @@ async function getEmbeddings(texts, model = 'emb-openai/text-embedding-3-large')
 
     } catch (error) {
         clearTimeout(timeoutId);
-        
-        if (error.name === 'AbortError') {
-            console.error('Error fetching embeddings: Request timed out after 60 seconds.');
+
+        if (axios.isCancel(error)) {
+             console.error('Error fetching embeddings: Request aborted (likely due to timeout).');
+        } else if (error.code === 'ECONNABORTED') {
+             console.error(`Error fetching embeddings: Request timed out via axios timeout (${error.config.timeout}ms).`);
+        } else if (error.response) {
+             console.error(`Error fetching embeddings: API request failed with status ${error.response.status}:`, error.response.data);
+             throw new Error(`API request failed with status ${error.response.status}`);
+        } else if (error.request) {
+             console.error('Error fetching embeddings: No response received from server.', error.message);
+             throw new Error('No response received from embedding service.');
         } else {
-             console.error('Error fetching embeddings:', error);
+             console.error('Error setting up request for embeddings:', error.message);
+             throw new Error('Error setting up request for embedding service.');
         }
         throw error;
     }
