@@ -140,7 +140,7 @@ app.post('/webhook/docs-push', verifyWebhookSignature, (req, res) => {
 
         console.log(`[AsyncProc] Spawning pipeline for module: ${safeModuleId}`);
         // IMPORTANT: Make sure the 'pipeline' script eventually calls 'publish_results.js'
-        const command = `npm run preprocess -- --module=${safeModuleId} && npm run pipeline -- --module=${safeModuleId}`;
+        const command = `npm run preprocess -- --module=${safeModuleId} && npm run publish -- --module=${safeModuleId} && npm run pipeline -- --module=${safeModuleId}`;
         const shell = process.platform === 'win32' ? 'cmd' : 'sh';
         const args = process.platform === 'win32' ? ['/c', command] : ['-c', command];
 
