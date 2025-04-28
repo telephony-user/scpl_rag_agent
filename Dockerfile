@@ -14,6 +14,7 @@ RUN npm install
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     pandoc \
+    ca-certificates \
  && rm -rf /var/lib/apt/lists/* 
 
 # Copy the rest of the application code
