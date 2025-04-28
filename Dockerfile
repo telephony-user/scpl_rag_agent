@@ -1,5 +1,5 @@
 # Use an official Node.js runtime as a parent image
-FROM node:18-alpine
+FROM node:18-slim
 
 # Set the working directory in the container
 WORKDIR /usr/src/app
@@ -10,8 +10,11 @@ COPY package*.json ./
 # Install project dependencies
 RUN npm install
 
-# Install required tools using apk (Alpine's package manager)
-RUN apk update && apk add --no-cache git pandoc
+# Install required tools using apt-get (Debian's package manager)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    pandoc \
+ && rm -rf /var/lib/apt/lists/* 
 
 # Copy the rest of the application code
 COPY . .
