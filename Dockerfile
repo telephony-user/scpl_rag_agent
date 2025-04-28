@@ -10,8 +10,8 @@ COPY package*.json ./
 # Install project dependencies
 RUN npm install
 
-# Install pandoc using apk (Alpine's package manager)
-RUN apk update && apk add --no-cache pandoc
+# Install required tools using apk (Alpine's package manager)
+RUN apk update && apk add --no-cache git pandoc
 
 # Copy the rest of the application code
 COPY . .
