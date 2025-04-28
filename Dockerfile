@@ -20,4 +20,4 @@ COPY . .
 EXPOSE 3000
 
 # Define the command to run the application (make sure this is the desired default command)
-CMD [ "node", "src/server.js" ] # Runs the webhook server by default 
+CMD node src/server.js # Runs the webhook server by default 
