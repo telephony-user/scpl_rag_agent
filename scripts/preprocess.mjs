@@ -511,17 +511,17 @@ async function preprocessModule(targetModuleId) {
         
         // 6. Save Chunks to FINAL Persistent Directory
         const baseOutputFilename = sanitizeFilename(path.basename(relativeMdPath, '.md'));
-        const fileSpecificFinalChunkDir = path.join(finalChunksOutputDir, baseOutputFilename);
-        // Ensure the directory for THIS file's chunks exists in persistent storage
-        await fs.ensureDir(fileSpecificFinalChunkDir);
+        // Ensure the main chunks output directory exists
+        await fs.ensureDir(finalChunksOutputDir); 
         
         let savedChunkCount = 0;
         for (let i = 0; i < chunks.length; i++) {
             const chunkContent = chunks[i];
             const chunkIndex = String(i).padStart(3, '0');
-            // Use a simpler filename for now, can be enhanced with metadata later
+            // Use a filename combining original base name and chunk index
             const chunkFilename = `${baseOutputFilename}_chunk_${chunkIndex}.md`;
-            const finalChunkPath = path.join(fileSpecificFinalChunkDir, chunkFilename);
+            // Save directly to the final chunks output directory
+            const finalChunkPath = path.join(finalChunksOutputDir, chunkFilename); 
 
             try {
                 await fs.writeFile(finalChunkPath, chunkContent);
@@ -530,7 +530,8 @@ async function preprocessModule(targetModuleId) {
                 console.error(`[Preprocess] Error saving chunk ${chunkFilename} to ${finalChunkPath}: ${writeError.message}`);
             }
         }
-        console.log(`[Step 4/3] Saved ${savedChunkCount} chunks to: ${path.relative(process.cwd(), fileSpecificFinalChunkDir)}`);
+        // Update log message to reflect the correct directory
+        console.log(`[Step 4/3] Saved ${savedChunkCount} chunks to: ${path.relative(process.cwd(), finalChunksOutputDir)}`); 
         totalChunksGenerated += savedChunkCount;
         // --- End Image Processing & Splitting --- 
     }

@@ -10,11 +10,10 @@ COPY package*.json ./
 # Install project dependencies
 RUN npm install
 
-# Install additional dependencies using apk (Alpine's package manager)
-# Add git as well, needed for fetching docs and pushing results
-RUN apk add --no-cache \
+# Install additional dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     pandoc \
-    git
+ && rm -rf /var/lib/apt/lists/*
 
 # Copy the rest of the application code
 COPY . .
@@ -22,5 +21,5 @@ COPY . .
 # Expose the port the app runs on (for webhook listener)
 EXPOSE 3000
 
-# Define the command to run the application (using shell form)
-CMD node src/server.js # Runs the webhook server by default 
+# Define the command to run the application (make sure this is the desired default command)
+CMD [ "node", "src/server.js" ] # Runs the webhook server by default 

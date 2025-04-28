@@ -8,27 +8,29 @@
     "test": "tests"
   },
   "scripts": {
-    "preprocess": "node scripts/preprocess.mjs",
+    "preprocess": "node -r dotenv/config scripts/preprocess.mjs",
     "start:server": "node src/server.js",
     "publish": "node scripts/publish_results.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "pipeline": "node scripts/publish_results.js"
+    "test": "jest",
+    "pipeline": "node -r dotenv/config scripts/pipeline.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@qdrant/qdrant-js": "^1.14.0",
+    "@qdrant/js-client-rest": "^1.14.0",
     "@supabase/supabase-js": "^2.49.4",
-    "axios": "^1.8.4",
+    "axios": "^1.9.0",
     "dotenv": "^16.5.0",
     "express": "^4.19.2",
     "fs-extra": "^11.3.0",
     "glob": "^11.0.2",
     "hast-util-to-string": "^3.0.1",
     "mdast-util-to-markdown": "^2.1.2",
+    "pg": "^8.15.6",
     "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
     "rehype-remark": "^10.0.1",
     "rehype-stringify": "^10.0.1",
     "remark": "^15.0.1",
@@ -38,6 +40,10 @@
     "simple-git": "^3.27.0",
     "unified": "^11.0.5",
     "unist-util-visit": "^5.0.0",
+    "uuid": "^11.1.0",
     "yargs": "^17.7.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
   }
 }
