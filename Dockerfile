@@ -10,10 +10,8 @@ COPY package*.json ./
 # Install project dependencies
 RUN npm install
 
-# Install additional dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    pandoc \
- && rm -rf /var/lib/apt/lists/*
+# Install pandoc using apk (Alpine's package manager)
+RUN apk update && apk add --no-cache pandoc
 
 # Copy the rest of the application code
 COPY . .
