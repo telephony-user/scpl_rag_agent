@@ -93,7 +93,7 @@ app.post('/webhook/docs-push', verifyWebhookSignature, (req, res) => {
         const parts = file.split('/');
         // Check if path has at least two parts (module_id/file.ext)
         // and ends with the correct extension.
-        return parts.length >= 2 && (file.endsWith('.md') || file.endsWith('.docx'));
+        return parts.length >= 2 && file.endsWith('.docx');
     });
 
     const affectedModules = new Set();
