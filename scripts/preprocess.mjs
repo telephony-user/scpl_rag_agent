@@ -105,47 +105,59 @@ async function convertDocxToMd(docxPath, outputDir, moduleDir) {
   const safeBaseName = sanitizeFilename(path.basename(docxPath, '.docx'));
   const outputMdFilename = `${safeBaseName}.md`;
   const outputMdPath = path.join(outputDir, outputMdFilename);
-  // Media dir relative to the output MD file
   const mediaSubDir = `./${safeBaseName}_media`; 
-  const absoluteMediaDir = path.join(outputDir, `${safeBaseName}_media`); // Absolute path for fs operations if needed
+  const absoluteMediaDir = path.join(outputDir, `${safeBaseName}_media`);
 
   console.log(`[Pandoc] Converting: ${path.basename(docxPath)} -> ${outputMdFilename}`);
   console.log(`[Pandoc] Output MD: ${outputMdPath}`);
   console.log(`[Pandoc] Media Dir: ${mediaSubDir} (in ${outputDir})`);
 
-  // Ensure output directory exists
   await fs.ensureDir(outputDir);
 
   const pandocArgs = [
-      '-f', 'docx',            // Input format
-      '-t', 'gfm',             // Output format (GitHub Flavored Markdown)
-      '--extract-media', mediaSubDir, // Extract media to specified dir
-      '--wrap=none',          // Don't wrap lines
-      '-o', outputMdPath,       // Output file path
-      docxPath               // Input file path
+      '-f', 'docx',
+      '-t', 'gfm',
+      '--extract-media', mediaSubDir,
+      '--wrap=none',
+      '-o', outputMdPath,
+      docxPath
   ];
 
   console.log(`[Pandoc] Executing: pandoc ${pandocArgs.join(' ')}`);
 
   return new Promise((resolve, reject) => {
-      const pandoc = spawn('pandoc', pandocArgs, {
-          // Set cwd so relative media path works correctly
+      const pandocProcess = spawn('pandoc', pandocArgs, {
           cwd: outputDir 
       });
+      
+      let stdout = '';
       let stderr = '';
-      pandoc.stderr.on('data', (data) => { stderr += data; });
-      pandoc.on('close', (code) => {
+
+      pandocProcess.stdout.on('data', (data) => { stdout += data.toString(); });
+      pandocProcess.stderr.on('data', (data) => { stderr += data.toString(); });
+
+      pandocProcess.on('error', (err) => {
+          console.error(`[Pandoc] Failed to start Pandoc process for ${path.basename(docxPath)}: ${err.message}`);
+          // Log stderr collected so far, if any
+          if (stderr) {
+              console.error(`[Pandoc Stderr on Error]: ${stderr}`);
+          }
+          reject(err); // Reject with the spawn error
+      });
+
+      pandocProcess.on('close', (code, signal) => {
+          console.log(`[Pandoc] Process for ${path.basename(docxPath)} exited with code ${code}, signal ${signal}`);
           if (code === 0) {
               console.log(`[Pandoc] Successfully converted ${path.basename(docxPath)} to ${outputMdPath}`);
+              // Optionally log stdout if needed: console.log(`[Pandoc Stdout]: ${stdout}`);
               resolve({ mdPath: outputMdPath, mediaDir: absoluteMediaDir });
           } else {
-              console.error(`[Pandoc] Error converting ${path.basename(docxPath)} (code ${code}): ${stderr}`);
-              reject(new Error(`Pandoc failed with code ${code}`));
+              // Log the actual error output from Pandoc (stderr)
+              console.error(`[Pandoc] Error converting ${path.basename(docxPath)} (code ${code}, signal ${signal})`);
+              console.error(`[Pandoc Stderr]: ${stderr || '(No stderr output)'}`);
+               // Optionally log stdout: console.error(`[Pandoc Stdout]: ${stdout || '(No stdout output)'}`);
+              reject(new Error(`Pandoc failed with code ${code} and signal ${signal}. Stderr: ${stderr}`));
           }
-      });
-      pandoc.on('error', (err) => {
-          console.error(`[Pandoc] Failed to start Pandoc for ${path.basename(docxPath)}: ${err}`);
-          reject(err);
       });
   });
 }
