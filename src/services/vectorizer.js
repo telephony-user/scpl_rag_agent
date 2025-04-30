@@ -25,9 +25,9 @@ async function getEmbeddings(texts, model = 'emb-openai/text-embedding-3-large')
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
-        console.error(`Error fetching embeddings: Request explicitly timed out after 60 seconds.`);
+        console.error(`Error fetching embeddings: Request explicitly timed out after 180 seconds.`);
         controller.abort();
-    }, 60000);
+    }, 180000);
 
     try {
         const response = await axios.post(API_URL, {
