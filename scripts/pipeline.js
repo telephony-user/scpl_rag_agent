@@ -72,7 +72,7 @@ const openRouterClient = axios.create({
     headers: {
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
-        'X-Application': 'scpl_pipeline_mermaid'
+        'X-Title': 'scpl_pipeline_mermaid'
     }
 });
 // ++ КОНЕЦ ДОБАВЛЕННОГО ++
@@ -445,41 +445,69 @@ async function main() {
                     logger.info(`Finished deleting existing Qdrant points for module ${moduleId}.`);
                     // +++ КОНЕЦ ВЫЗОВА УДАЛЕНИЯ +++
 
-                    const questionTexts = questionsToVectorize.map(q => q.question_text);
-                    logger.info(`Vectorizing ${questionTexts.length} questions using vsegpt.ru...`);
+                    // --- MODIFICATION: Batch processing for embeddings ---
+                    const BATCH_SIZE = 10; // Process 10 questions per API call
+                    let allEmbeddings = [];
+                    let totalVectorized = 0;
 
-                    // 2. Получить векторы для текстов вопросов
-                    // TODO: Убедиться, что модель в vectorizer.js соответствует той, под которую создана коллекция
-                    const embeddings = await getEmbeddings(questionTexts);
+                    logger.info(`Vectorizing ${questionsToVectorize.length} questions in batches of ${BATCH_SIZE}...`);
 
-                    if (embeddings && embeddings.length === questionsToVectorize.length) {
-                        logger.info(`Received ${embeddings.length} embeddings.`);
+                    for (let i = 0; i < questionsToVectorize.length; i += BATCH_SIZE) {
+                        const batchQuestions = questionsToVectorize.slice(i, i + BATCH_SIZE);
+                        const batchTexts = batchQuestions.map(q => q.question_text);
+                        const batchStartIndex = i;
+                        const batchEndIndex = i + batchTexts.length -1;
 
-                        // 3. Подготовить точки для Qdrant
+                        logger.info(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}: Questions ${batchStartIndex} to ${batchEndIndex}`);
+
+                        try {
+                            // Get embeddings for the current batch
+                            const batchEmbeddings = await getEmbeddings(batchTexts);
+
+                            if (batchEmbeddings && batchEmbeddings.length === batchTexts.length) {
+                                allEmbeddings.push(...batchEmbeddings); // Add batch results to the main array
+                                totalVectorized += batchEmbeddings.length;
+                                logger.debug(`Received ${batchEmbeddings.length} embeddings for batch ${Math.floor(i / BATCH_SIZE) + 1}. Total vectorized: ${totalVectorized}`);
+                            } else {
+                                logger.error(`Mismatch or error in embeddings for batch ${Math.floor(i / BATCH_SIZE) + 1}. Expected ${batchTexts.length}, got ${batchEmbeddings?.length}. Stopping vectorization.`);
+                                // Decide on error handling: stop or skip batch? Stopping for now.
+                                throw new Error(`Embedding batch failed (questions ${batchStartIndex}-${batchEndIndex}).`);
+                            }
+                        } catch (batchError) {
+                             logger.error(`Error getting embeddings for batch ${Math.floor(i / BATCH_SIZE) + 1} (questions ${batchStartIndex}-${batchEndIndex}):`, batchError.message);
+                             // Re-throw the error to stop the overall vectorization process
+                             throw batchError; 
+                        }
+                    }
+                    // --- END MODIFICATION ---
+
+
+                    // Use the collected embeddings (allEmbeddings)
+                    if (allEmbeddings.length === questionsToVectorize.length) {
+                        logger.info(`Successfully received ${allEmbeddings.length} embeddings for all batches.`);
+
+                        // 3. Подготовить точки для Qdrant (using allEmbeddings)
                         const pointsToUpsert = questionsToVectorize.map((question, index) => ({
-                            // Используем question_id как уникальный идентификатор точки.
-                            // Qdrant предпочитает UUID или числовые ID. Преобразуем в строку, если нужно.
-                            // Если question_id не числовой, используйте его напрямую.
-                            // Если ID могут быть не уникальны между запусками или нужен UUID: id: uuidv4(),
                              id: question.question_id, // Используем ID из БД
-                            vector: embeddings[index],
-                            payload: { // Включаем важную метаинформацию для поиска и фильтрации
+                            vector: allEmbeddings[index], // Use embedding from the collected results
+                            payload: {
                                 question_text: question.question_text,
                                 question_id: question.question_id,
                                 chunk_id: question.chunk_id,
                                 document_id: question.document_id,
-                                module_id: question.module_id, // Важно для фильтрации по модулю
+                                module_id: question.module_id,
                             },
                         }));
 
                         logger.info(`Prepared ${pointsToUpsert.length} points for Qdrant upsert.`);
 
-                        // 4. Загрузить/обновить точки в Qdrant (батчами, если необходимо - клиент может делать это сам)
+                        // 4. Загрузить/обновить точки в Qdrant
                         await upsertPoints(pointsToUpsert);
                         logger.info(`Successfully upserted points into Qdrant collection '${COLLECTION_NAME}'.`);
 
                     } else {
-                        logger.error(`Mismatch between number of questions (${questionsToVectorize.length}) and received embeddings (${embeddings?.length}). Skipping Qdrant upsert.`);
+                        // This condition might be reached if an error was thrown during batching
+                        logger.error(`Failed to get embeddings for all questions. Expected ${questionsToVectorize.length}, received ${allEmbeddings.length}. Skipping Qdrant upsert.`);
                     }
                 } else {
                      logger.warn(`No questions found in DB for document ${documentId} to vectorize. Skipping deletion and upsert.`);
