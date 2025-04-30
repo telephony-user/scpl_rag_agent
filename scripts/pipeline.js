@@ -460,23 +460,53 @@ async function main() {
 
                         logger.info(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}: Questions ${batchStartIndex} to ${batchEndIndex}`);
 
-                        try {
-                            // Get embeddings for the current batch
-                            const batchEmbeddings = await getEmbeddings(batchTexts);
+                        // --- MODIFICATION: Add Retry Logic ---
+                        let batchEmbeddings = null;
+                        let attempts = 0;
+                        const MAX_ATTEMPTS = 3;
+                        const RETRY_DELAY = 5000; // 5 seconds
 
-                            if (batchEmbeddings && batchEmbeddings.length === batchTexts.length) {
-                                allEmbeddings.push(...batchEmbeddings); // Add batch results to the main array
-                                totalVectorized += batchEmbeddings.length;
-                                logger.debug(`Received ${batchEmbeddings.length} embeddings for batch ${Math.floor(i / BATCH_SIZE) + 1}. Total vectorized: ${totalVectorized}`);
-                            } else {
-                                logger.error(`Mismatch or error in embeddings for batch ${Math.floor(i / BATCH_SIZE) + 1}. Expected ${batchTexts.length}, got ${batchEmbeddings?.length}. Stopping vectorization.`);
-                                // Decide on error handling: stop or skip batch? Stopping for now.
-                                throw new Error(`Embedding batch failed (questions ${batchStartIndex}-${batchEndIndex}).`);
+                        while (attempts < MAX_ATTEMPTS && !batchEmbeddings) {
+                            attempts++;
+                            try {
+                                if (attempts > 1) {
+                                     logger.warn(`Retrying batch ${Math.floor(i / BATCH_SIZE) + 1} (Attempt ${attempts}/${MAX_ATTEMPTS}) after delay...`);
+                                     await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+                                }
+                                // Get embeddings for the current batch
+                                const result = await getEmbeddings(batchTexts);
+                                // Check if result is valid before assigning
+                                if (result && result.length === batchTexts.length) {
+                                    batchEmbeddings = result;
+                                } else {
+                                    // Log unexpected structure even on retry attempts
+                                     logger.error(`Unexpected structure or partial result for batch ${Math.floor(i / BATCH_SIZE) + 1} on attempt ${attempts}. Expected ${batchTexts.length}, got ${result?.length}.`);
+                                    // Optional: throw error immediately if structure is wrong, or let retry loop continue
+                                    if (attempts >= MAX_ATTEMPTS) {
+                                         throw new Error(`Embedding batch ${Math.floor(i / BATCH_SIZE) + 1} failed after ${MAX_ATTEMPTS} attempts due to unexpected structure.`);
+                                    }
+                                }
+
+                            } catch (batchError) {
+                                logger.error(`Attempt ${attempts}/${MAX_ATTEMPTS} failed for batch ${Math.floor(i / BATCH_SIZE) + 1} (questions ${batchStartIndex}-${batchEndIndex}):`, batchError.message);
+                                if (attempts >= MAX_ATTEMPTS) {
+                                    logger.error(`Batch ${Math.floor(i / BATCH_SIZE) + 1} failed after ${MAX_ATTEMPTS} attempts.`);
+                                    throw batchError; // Re-throw the error after final attempt
+                                }
+                                // Continue loop to retry after delay
                             }
-                        } catch (batchError) {
-                             logger.error(`Error getting embeddings for batch ${Math.floor(i / BATCH_SIZE) + 1} (questions ${batchStartIndex}-${batchEndIndex}):`, batchError.message);
-                             // Re-throw the error to stop the overall vectorization process
-                             throw batchError; 
+                        }
+                        // --- END RETRY MODIFICATION ---
+
+                        // Check if embeddings were successfully obtained after retries
+                        if (batchEmbeddings) { // Use the variable populated in the retry loop
+                            allEmbeddings.push(...batchEmbeddings);
+                            totalVectorized += batchEmbeddings.length;
+                            logger.debug(`Received ${batchEmbeddings.length} embeddings for batch ${Math.floor(i / BATCH_SIZE) + 1}. Total vectorized: ${totalVectorized}`);
+                        } else {
+                             // This should ideally not be reached if the retry loop throws on final failure
+                            logger.error(`Failed to get embeddings for batch ${Math.floor(i / BATCH_SIZE) + 1} after ${MAX_ATTEMPTS} attempts. Stopping vectorization.`);
+                            throw new Error(`Embedding batch failed permanently (questions ${batchStartIndex}-${batchEndIndex}).`);
                         }
                     }
                     // --- END MODIFICATION ---
@@ -488,7 +518,7 @@ async function main() {
 
                         // 3. Подготовить точки для Qdrant (using allEmbeddings)
                         const pointsToUpsert = questionsToVectorize.map((question, index) => ({
-                             id: question.question_id, // Используем ID из БД
+                            id: question.question_id, // Используем ID из БД
                             vector: allEmbeddings[index], // Use embedding from the collected results
                             payload: {
                                 question_text: question.question_text,

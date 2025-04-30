@@ -39,6 +39,7 @@ async function getEmbeddings(texts, model = 'emb-openai/text-embedding-3-large')
                 'Authorization': `Bearer ${API_KEY}`,
             },
             signal: controller.signal,
+            timeout: 170000
         });
 
         clearTimeout(timeoutId);
