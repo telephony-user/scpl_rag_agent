@@ -447,56 +447,19 @@ async function preprocessModule(targetModuleId) {
     console.log(`[Preprocess] Documentation repository check/update complete in temp dir.`);
 
     // 3. Define Source Directory WITHIN the Temporary Directory
-    let sourceModuleDirPath = null;
-    let docxContainingDirs = [];
-    console.log(`[Preprocess] Searching for the unique directory containing .docx files in ${tempWorkingDir}...`);
-    try {
-      const entries = await fs.readdir(tempWorkingDir, { withFileTypes: true });
-      const potentialDirs = entries.filter(dirent => dirent.isDirectory() && dirent.name !== '.git'); // Ignore .git directory
-      console.log(`[Preprocess Debug] Checking directories in temp root: ${potentialDirs.map(d => d.name).join(', ')}`);
-
-      for (const dir of potentialDirs) {
-          const currentDirPath = path.join(tempWorkingDir, dir.name);
-          // Check for .docx files directly within this directory
-          const docxFiles = await glob('*.docx', { cwd: currentDirPath, absolute: false }); 
-          if (docxFiles.length > 0) {
-              console.log(`[Preprocess Debug] Found ${docxFiles.length} .docx file(s) in directory: ${dir.name}`);
-              docxContainingDirs.push(currentDirPath);
-          }
-      }
-
-    } catch (readError) {
-        console.error(`[Preprocess] Error scanning temporary directory ${tempWorkingDir}:`, readError);
-        throw new Error(`Failed to scan temporary directory to find the source module folder.`);
-    }
-
-    // Check the result
-    if (docxContainingDirs.length === 0) {
-         console.error(`[Preprocess] Error: No directory containing .docx files found within the cloned repository root: ${tempWorkingDir}`);
-          try {
+    const tempSourceModuleDir = path.join(tempWorkingDir, targetModuleId);
+    console.log(`[Preprocess] Source directory for this run: ${tempSourceModuleDir}`);
+    // Check if this directory actually exists
+    if (!await fs.pathExists(tempSourceModuleDir)) {
+        console.error(`[Preprocess] Error: Module directory '${targetModuleId}' not found within the cloned repository: ${tempSourceModuleDir}`);
+        // Attempt to list contents of tempWorkingDir for debugging
+        try {
             const rootContents = await fs.readdir(tempWorkingDir);
             console.log(`[Preprocess Debug] Contents of temporary root (${tempWorkingDir}):`, rootContents.join(', '));
-          } catch (listError) {
+        } catch (listError) {
             console.error(`[Preprocess Debug] Could not list contents of ${tempWorkingDir}.`);
-          }
-         throw new Error(`Could not find any directory with .docx files for module ${targetModuleId}.`);
-    } else if (docxContainingDirs.length > 1) {
-        console.error(`[Preprocess] Error: Found .docx files in multiple directories: ${docxContainingDirs.map(p => path.basename(p)).join(', ')}`);
-        console.error(`[Preprocess] Cannot determine the unique source directory for module ${targetModuleId}. Please ensure only one top-level folder in the repo contains the .docx files for this module.`);
-        throw new Error(`Ambiguous module source: .docx files found in multiple directories.`);
-    } else {
-        sourceModuleDirPath = docxContainingDirs[0];
-        console.log(`[Preprocess] Found unique source directory containing .docx files: ${path.basename(sourceModuleDirPath)}`);
-    }
-    
-    const tempSourceModuleDir = sourceModuleDirPath; // Assign the found path
-
-    // Original check is less critical now but confirms the path is valid
-    console.log(`[Preprocess] Source directory for this run: ${tempSourceModuleDir}`);
-    if (!await fs.pathExists(tempSourceModuleDir)) {
-        // This should not happen if logic above is correct
-        console.error(`[Preprocess] Internal Error: Identified source directory path does not exist: ${tempSourceModuleDir}`);
-        throw new Error(`Internal error resolving module directory path.`);
+        }
+        throw new Error(`Module directory ${targetModuleId} not found in repository root.`);
     }
 
     // 4. Convert DOCX to MD (within temp directory)
