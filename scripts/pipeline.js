@@ -464,7 +464,7 @@ async function main() {
                         let batchEmbeddings = null;
                         let attempts = 0;
                         const MAX_ATTEMPTS = 3;
-                        const RETRY_DELAY = 5000; // 5 seconds
+                        const RETRY_DELAY = 20000; // Increased delay to 20 seconds
 
                         while (attempts < MAX_ATTEMPTS && !batchEmbeddings) {
                             attempts++;
