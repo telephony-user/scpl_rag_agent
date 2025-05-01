@@ -446,7 +446,8 @@ async function main() {
                     // +++ КОНЕЦ ВЫЗОВА УДАЛЕНИЯ +++
 
                     // --- MODIFICATION: Batch processing for embeddings ---
-                    const BATCH_SIZE = 10; // Process 10 questions per API call
+                    const BATCH_SIZE = 5; // Process 5 questions per API call (Reduced batch size)
+                    const DELAY_BETWEEN_BATCHES = 2000; // Add 2 seconds delay between successful batches
                     let allEmbeddings = [];
                     let totalVectorized = 0;
 
@@ -503,6 +504,11 @@ async function main() {
                             allEmbeddings.push(...batchEmbeddings);
                             totalVectorized += batchEmbeddings.length;
                             logger.debug(`Received ${batchEmbeddings.length} embeddings for batch ${Math.floor(i / BATCH_SIZE) + 1}. Total vectorized: ${totalVectorized}`);
+                            // Add delay AFTER successful batch processing
+                            if (i + BATCH_SIZE < questionsToVectorize.length) { // Don't delay after the last batch
+                                logger.debug(`Waiting ${DELAY_BETWEEN_BATCHES}ms before next batch...`);
+                                await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_BATCHES));
+                            }
                         } else {
                              // This should ideally not be reached if the retry loop throws on final failure
                             logger.error(`Failed to get embeddings for batch ${Math.floor(i / BATCH_SIZE) + 1} after ${MAX_ATTEMPTS} attempts. Stopping vectorization.`);
