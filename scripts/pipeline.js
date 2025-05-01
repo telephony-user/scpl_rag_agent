@@ -446,8 +446,8 @@ async function main() {
                     // +++ КОНЕЦ ВЫЗОВА УДАЛЕНИЯ +++
 
                     // --- MODIFICATION: Batch processing for embeddings ---
-                    const BATCH_SIZE = 5; // Process 5 questions per API call (Reduced batch size)
-                    const DELAY_BETWEEN_BATCHES = 2000; // Add 2 seconds delay between successful batches
+                    const BATCH_SIZE = 500; // Process 5 questions per API call (Reduced batch size)
+                    const DELAY_BETWEEN_BATCHES = 1000; // Add 2 seconds delay between successful batches
                     let allEmbeddings = [];
                     let totalVectorized = 0;
 
