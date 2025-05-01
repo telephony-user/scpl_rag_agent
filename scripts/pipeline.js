@@ -524,7 +524,7 @@ async function main() {
 
                         // 3. Подготовить точки для Qdrant (using allEmbeddings)
                         const pointsToUpsert = questionsToVectorize.map((question, index) => ({
-                            id: question.question_id, // Используем ID из БД
+                             id: question.question_id, // Используем ID из БД
                             vector: allEmbeddings[index], // Use embedding from the collected results
                             payload: {
                                 question_text: question.question_text,
@@ -537,9 +537,31 @@ async function main() {
 
                         logger.info(`Prepared ${pointsToUpsert.length} points for Qdrant upsert.`);
 
-                        // 4. Загрузить/обновить точки в Qdrant
-                        await upsertPoints(pointsToUpsert);
-                        logger.info(`Successfully upserted points into Qdrant collection '${COLLECTION_NAME}'.`);
+                        // 4. Загрузить/обновить точки в Qdrant - В БАТЧАХ
+                        const QDRANT_UPSERT_BATCH_SIZE = parseInt(process.env.QDRANT_UPSERT_BATCH_SIZE || '100', 10); // Размер батча для загрузки в Qdrant
+                        logger.info(`Upserting ${pointsToUpsert.length} points to Qdrant in batches of ${QDRANT_UPSERT_BATCH_SIZE}...`);
+                        let upsertedCount = 0;
+                        for (let i = 0; i < pointsToUpsert.length; i += QDRANT_UPSERT_BATCH_SIZE) {
+                            const batchPoints = pointsToUpsert.slice(i, i + QDRANT_UPSERT_BATCH_SIZE);
+                            const batchStartIndex = i;
+                            const batchEndIndex = i + batchPoints.length - 1;
+                            logger.debug(`Upserting batch ${Math.floor(i / QDRANT_UPSERT_BATCH_SIZE) + 1}: Points ${batchStartIndex} to ${batchEndIndex}`);
+                            try {
+                                await upsertPoints(batchPoints); // Отправляем текущий батч
+                                upsertedCount += batchPoints.length;
+                                logger.debug(`Successfully upserted batch ${Math.floor(i / QDRANT_UPSERT_BATCH_SIZE) + 1}. Total upserted: ${upsertedCount}`);
+                                // Опционально: добавить небольшую задержку между батчами, если сервер Qdrant перегружается
+                                // await new Promise(resolve => setTimeout(resolve, 200)); 
+                            } catch (upsertError) {
+                                logger.error(`Error upserting batch ${Math.floor(i / QDRANT_UPSERT_BATCH_SIZE) + 1} (points ${batchStartIndex}-${batchEndIndex}):`, upsertError.message || upsertError);
+                                // Решаем, прерывать ли весь процесс или пропустить батч
+                                throw new Error(`Failed to upsert batch starting at index ${batchStartIndex}. Stopping pipeline.`); 
+                                // Или continue; // чтобы пропустить сбойный батч и попробовать следующие
+                            }
+                        }
+                        logger.info(`Successfully upserted ${upsertedCount} points into Qdrant collection '${COLLECTION_NAME}'.`);
+                        // await upsertPoints(pointsToUpsert); // Старая строка - убираем
+                        // logger.info(`Successfully upserted points into Qdrant collection '${COLLECTION_NAME}'.`); // Старая строка - убираем
 
                     } else {
                         // This condition might be reached if an error was thrown during batching
