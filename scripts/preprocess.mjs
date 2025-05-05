@@ -39,7 +39,7 @@ const SPLIT_HEADERS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
 const SKIP_SVG = process.env.SKIP_SVG !== 'false'; // Skip SVG by default
 const LLM_IMAGE_ENDPOINT = process.env.LLM_IMAGE_ENDPOINT; // Endpoint for image->Mermaid LLM
 const LLM_API_KEY = process.env.LLM_API_KEY; // API key for the LLM
-const LLM_MODEL_NAME = process.env.LLM_MODEL_NAME || 'anthropic/claude-3.5-sonnet'; // Default model
+const LLM_MODEL_NAME = process.env.MERMAID_LLM_MODEL || 'anthropic/claude-3.5-sonnet'; // Default model
 
 // --- Argument Parsing ---
 const argv = yargs(hideBin(process.argv))
@@ -210,7 +210,9 @@ async function getMermaidDiagramFromImage(imagePath, contextText = '') {
         const response = await axios.post(LLM_IMAGE_ENDPOINT, requestBody, {
             headers: {
                 'Authorization': `Bearer ${LLM_API_KEY}`,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json', 
+                'X-Title': 'Mermaid Diagram Generator'
+
             }
         });
 
