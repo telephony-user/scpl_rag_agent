@@ -42,9 +42,9 @@ const LLM_API_KEY = process.env.LLM_API_KEY; // API key for the LLM
 const LLM_MODEL_NAME = process.env.MERMAID_LLM_MODEL || 'anthropic/claude-3.5-sonnet'; // Default model
 
 // --- Guard LLM Configuration (for checking if image is a diagram) ---
-const GUARD_IMAGE_MODEL = process.env.GUARD_IMAGE_MODEL || LLM_MODEL_NAME; // Default to main LLM model if not set
-const GUARD_LLM_IMAGE_ENDPOINT = process.env.GUARD_LLM_IMAGE_ENDPOINT || LLM_IMAGE_ENDPOINT; // Default to main LLM endpoint
-const GUARD_LLM_API_KEY = process.env.GUARD_LLM_API_KEY || LLM_API_KEY; // Default to main LLM API key
+const GUARD_IMAGE_MODEL = process.env.GUARD_IMAGE_MODEL; // Default to main LLM model if not set
+const GUARD_LLM_IMAGE_ENDPOINT =  LLM_IMAGE_ENDPOINT; // Default to main LLM endpoint
+const GUARD_LLM_API_KEY =  LLM_API_KEY; // Default to main LLM API key
 
 // --- Argument Parsing ---
 const argv = yargs(hideBin(process.argv))
