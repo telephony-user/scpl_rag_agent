@@ -41,6 +41,11 @@ const LLM_IMAGE_ENDPOINT = process.env.LLM_IMAGE_ENDPOINT; // Endpoint for image
 const LLM_API_KEY = process.env.LLM_API_KEY; // API key for the LLM
 const LLM_MODEL_NAME = process.env.MERMAID_LLM_MODEL || 'anthropic/claude-3.5-sonnet'; // Default model
 
+// --- Guard LLM Configuration (for checking if image is a diagram) ---
+const GUARD_IMAGE_MODEL = process.env.GUARD_IMAGE_MODEL || LLM_MODEL_NAME; // Default to main LLM model if not set
+const GUARD_LLM_IMAGE_ENDPOINT = process.env.GUARD_LLM_IMAGE_ENDPOINT || LLM_IMAGE_ENDPOINT; // Default to main LLM endpoint
+const GUARD_LLM_API_KEY = process.env.GUARD_LLM_API_KEY || LLM_API_KEY; // Default to main LLM API key
+
 // --- Argument Parsing ---
 const argv = yargs(hideBin(process.argv))
   .option('module', {
@@ -160,6 +165,90 @@ async function convertDocxToMd(docxPath, outputDir, moduleDir) {
           }
       });
   });
+}
+
+// --- Helper: Check if Image is a Diagram (using Guard LLM) ---
+async function isImageADiagram(imagePath, contextText = '') {
+    if (!GUARD_LLM_IMAGE_ENDPOINT || !GUARD_LLM_API_KEY) {
+        console.warn('[Guard LLM] Guard LLM endpoint or API key not configured. Assuming image IS a diagram to maintain previous behavior.');
+        return true; // Default to true if guard LLM is not configured
+    }
+    console.log(`[Guard LLM] Checking if image is a diagram: ${imagePath}`);
+    try {
+        const imageBuffer = await fs.readFile(imagePath);
+        const base64Image = imageBuffer.toString('base64');
+        const ext = path.extname(imagePath).toLowerCase();
+        let mimeType = 'application/octet-stream';
+        if (ext === '.png') mimeType = 'image/png';
+        else if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
+        else if (ext === '.gif') mimeType = 'image/gif';
+        else if (ext === '.webp') mimeType = 'image/webp';
+
+        const requestBody = {
+            model: GUARD_IMAGE_MODEL,
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: `Is this image a diagram, flowchart, or schematic suitable for Mermaid representation? Or is it a simple icon, photo, or decorative symbol? Respond with only 'yes' or 'no'. ${contextText ? 'Context: ' + contextText : ''}`
+                        },
+                        {
+                            type: "image_url",
+                            image_url: {
+                                url: `data:${mimeType};base64,${base64Image}`
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens: 10 // Expecting a very short response
+        };
+
+        console.log(`[Guard LLM] Sending request to ${GUARD_IMAGE_MODEL} for ${imagePath}...`);
+        const response = await axios.post(GUARD_LLM_IMAGE_ENDPOINT, requestBody, {
+            headers: {
+                'Authorization': `Bearer ${GUARD_LLM_API_KEY}`,
+                'Content-Type': 'application/json',
+                'X-Title': 'Guard LLM Image Check'
+            }
+        });
+
+        let resultText = null;
+        if (response.status === 200 && response.data && Array.isArray(response.data.choices) && response.data.choices.length > 0) {
+            const choice = response.data.choices[0];
+            if (choice.message && typeof choice.message.content === 'string') {
+                resultText = choice.message.content.trim().toLowerCase();
+                console.log(`[Guard LLM] Received response for ${imagePath}: "${resultText}"`);
+            } else {
+                console.warn(`[Guard LLM] Unexpected response structure from Guard LLM for ${imagePath}. Assuming it's not a diagram.`);
+                console.debug('[Guard LLM] Response data:', response.data);
+                return false;
+            }
+        } else {
+            console.warn(`[Guard LLM] Unexpected status or response format from Guard LLM for ${imagePath}. Assuming it's not a diagram. Status: ${response.status}`);
+            console.debug('[Guard LLM] Response data:', response.data);
+            return false;
+        }
+
+        if (resultText === 'yes') {
+            console.log(`[Guard LLM] Image ${imagePath} IS a diagram.`);
+            return true;
+        } else if (resultText === 'no') {
+            console.log(`[Guard LLM] Image ${imagePath} is NOT a diagram.`);
+            return false;
+        } else {
+            console.warn(`[Guard LLM] Ambiguous response from Guard LLM for ${imagePath}: "${resultText}". Expected 'yes' or 'no'. Assuming it's not a diagram.`);
+            return false;
+        }
+
+    } catch (error) {
+        console.error(`[Guard LLM] Error checking image ${imagePath}:`, error.response ? JSON.stringify(error.response.data) : error.message);
+        if (error.stack) { console.error(error.stack); }
+        console.warn(`[Guard LLM] Due to error, assuming image ${imagePath} is NOT a diagram.`);
+        return false; // Default to false on error
+    }
 }
 
 // --- Image Processing Logic --- (Using messages format for image)
@@ -284,10 +373,14 @@ async function processAndReplaceImages(mdContent, mdFilePath) {
 
     console.log(`[Main Processor] Поиск HTML <img> тегов с использованием regex...`);
     const promises = [];
-    let foundNonSvgCount = 0;
+    let foundHtmlImgCount = 0; // Total HTML img tags found
+    let processedForLlmCount = 0; // Count of images sent to Mermaid LLM
     let skippedSvgCount = 0;
+    let skippedNotDiagramCount = 0; // Count of images skipped as not diagrams
+    let skippedFileNotFoundCount = 0; // Count of images skipped because file not found
 
     while ((match = imgRegex.exec(mdContent)) !== null) {
+        foundHtmlImgCount++;
         const fullMatch = match[0];
         // Group 1 captures the src value in the new regex
         const imgSrc = match[1];
@@ -297,24 +390,41 @@ async function processAndReplaceImages(mdContent, mdFilePath) {
             continue;
         }
 
-        console.log(`[Main Processor Debug] Regex нашел тег: ${fullMatch} | Извлеченный src: ${imgSrc}`);
+        console.log(`[Main Processor Debug] Regex нашел тег #${foundHtmlImgCount}: ${fullMatch} | Извлеченный src: ${imgSrc}`);
         const isSvg = imgSrc.toLowerCase().endsWith('.svg');
 
         if (isSvg && SKIP_SVG) {
-            console.log(`[Main Processor] Пропущен SVG HTML тег: ${fullMatch}`);
+            console.log(`[Main Processor] Пропущен SVG HTML тег (SKIP_SVG=true): ${imgSrc}`);
             skippedSvgCount++;
             continue;
         }
         if (isSvg && !SKIP_SVG) {
-             console.log(`[Main Processor] Обработка SVG тега (пропуск LLM): ${fullMatch}`);
-             skippedSvgCount++; // Count as skipped for LLM processing
+             console.log(`[Main Processor] Обработка SVG тега (пропуск LLM, SKIP_SVG=false): ${imgSrc}`);
+             // SVGs are not sent to LLM, img tag remains
              continue;
         }
 
-        // If we reach here, it's a non-SVG image to be processed
-        foundNonSvgCount++;
-        console.log(`[Main Processor] Найдено совпадение HTML img #${foundNonSvgCount} (не SVG): ${fullMatch}`);
+        // For non-SVG images, resolve path and check existence
         const absoluteImagePath = path.resolve(mdDir, imgSrc);
+
+        if (!await fs.pathExists(absoluteImagePath)) {
+            console.warn(`[Main Processor] Файл изображения не найден: ${absoluteImagePath} (src: ${imgSrc}). Тег <img> будет пропущен.`);
+            skippedFileNotFoundCount++;
+            continue; // Skip this image, leave the <img> tag as is
+        }
+
+        // Check if the image is a diagram using Guard LLM
+        console.log(`[Main Processor] Проверка, является ли ${absoluteImagePath} диаграммой...`);
+        const isDiagram = await isImageADiagram(absoluteImagePath);
+        if (!isDiagram) {
+            console.log(`[Main Processor] Изображение ${absoluteImagePath} не является диаграммой (согласно Guard LLM). Тег <img> будет сохранен.`);
+            skippedNotDiagramCount++;
+            continue; // Skip LLM processing, leave <img> tag as is
+        }
+
+        // If we reach here, it's a non-SVG image, it exists, and it's considered a diagram
+        processedForLlmCount++;
+        console.log(`[Main Processor] Найдено изображение #${processedForLlmCount} для обработки LLM (не SVG, существует, диаграмма): ${imgSrc}`);
         const placeholder = `%%%MERMAID_PLACEHOLDER_${imageReplacements.length}%%%`;
         processedMdContent = processedMdContent.replace(fullMatch, placeholder);
 
@@ -337,7 +447,11 @@ async function processAndReplaceImages(mdContent, mdFilePath) {
         );
     }
 
-    console.log(`[Main Processor] Поиск завершен. Найдено для обработки (не SVG): ${foundNonSvgCount}. Пропущено (SVG или ошибка): ${skippedSvgCount}.`);
+    console.log(`[Main Processor] Поиск HTML <img> завершен. Всего найдено: ${foundHtmlImgCount}.`);
+    console.log(`  Пропущено SVG (SKIP_SVG=${SKIP_SVG}): ${skippedSvgCount}.`);
+    console.log(`  Пропущено из-за отсутствия файла: ${skippedFileNotFoundCount}.`);
+    console.log(`  Пропущено (не диаграмма по Guard LLM): ${skippedNotDiagramCount}.`);
+    console.log(`  Отправлено на обработку в Mermaid LLM: ${processedForLlmCount}.`);
 
     // Wait for all LLM calls to complete
     if (promises.length > 0) {
@@ -576,3 +690,4 @@ async function preprocessModule(targetModuleId) {
 // --- Run the script ---
 console.log(`[Preprocess Script] Invoked for module: ${moduleId}`);
 preprocessModule(moduleId);
+
