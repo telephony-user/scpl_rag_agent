@@ -168,9 +168,18 @@ async function convertDocxToMd(docxPath, outputDir, moduleDir) {
 }
 
 // --- Helper: Check if Image is a Diagram (using Guard LLM) ---
+const diagramCheckCache = new Map(); // Кэш для результатов проверки isImageADiagram
+
 async function isImageADiagram(imagePath, contextText = '') {
+    if (diagramCheckCache.has(imagePath)) {
+        const cachedResult = diagramCheckCache.get(imagePath);
+        console.log(`[Guard LLM Cache] Using cached result for ${imagePath}: ${cachedResult}`);
+        return cachedResult;
+    }
+
     if (!GUARD_LLM_IMAGE_ENDPOINT || !GUARD_LLM_API_KEY) {
         console.warn('[Guard LLM] Guard LLM endpoint or API key not configured. Assuming image IS a diagram to maintain previous behavior.');
+        diagramCheckCache.set(imagePath, true); // Сохраняем результат по умолчанию в кэш
         return true; // Default to true if guard LLM is not configured
     }
     console.log(`[Guard LLM] Checking if image is a diagram: ${imagePath}`);
@@ -224,22 +233,27 @@ async function isImageADiagram(imagePath, contextText = '') {
             } else {
                 console.warn(`[Guard LLM] Unexpected response structure from Guard LLM for ${imagePath}. Assuming it's not a diagram.`);
                 console.debug('[Guard LLM] Response data:', response.data);
+                diagramCheckCache.set(imagePath, false); // Кэшируем результат
                 return false;
             }
         } else {
             console.warn(`[Guard LLM] Unexpected status or response format from Guard LLM for ${imagePath}. Assuming it's not a diagram. Status: ${response.status}`);
             console.debug('[Guard LLM] Response data:', response.data);
+            diagramCheckCache.set(imagePath, false); // Кэшируем результат
             return false;
         }
 
         if (resultText === 'yes') {
             console.log(`[Guard LLM] Image ${imagePath} IS a diagram.`);
+            diagramCheckCache.set(imagePath, true); // Кэшируем результат
             return true;
         } else if (resultText === 'no') {
             console.log(`[Guard LLM] Image ${imagePath} is NOT a diagram.`);
+            diagramCheckCache.set(imagePath, false); // Кэшируем результат
             return false;
         } else {
             console.warn(`[Guard LLM] Ambiguous response from Guard LLM for ${imagePath}: "${resultText}". Expected 'yes' or 'no'. Assuming it's not a diagram.`);
+            diagramCheckCache.set(imagePath, false); // Кэшируем результат
             return false;
         }
 
@@ -247,6 +261,7 @@ async function isImageADiagram(imagePath, contextText = '') {
         console.error(`[Guard LLM] Error checking image ${imagePath}:`, error.response ? JSON.stringify(error.response.data) : error.message);
         if (error.stack) { console.error(error.stack); }
         console.warn(`[Guard LLM] Due to error, assuming image ${imagePath} is NOT a diagram.`);
+        diagramCheckCache.set(imagePath, false); // Кэшируем результат при ошибке
         return false; // Default to false on error
     }
 }
